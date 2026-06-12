@@ -4,10 +4,13 @@
 
 ## 版本说明
 
-本仓库提供两个版本的脚本：
+本仓库提供三个版本的脚本：
 
-1. **tieba_scraper_simple.py** (推荐) - 简化版，使用Python标准库，无需安装额外依赖
-2. **tieba_scraper.py** - 完整版，功能更强大，但需要安装第三方依赖包
+1. **tieba_scraper_simple.py** (基础版) - 简化版，使用Python标准库，无需安装额外依赖
+2. **tieba_scraper_cookie.py** (推荐) - Cookie版本，可绕过反爬虫限制，解决403错误
+3. **tieba_scraper.py** - 完整版，功能更强大，但需要安装第三方依赖包
+
+**遇到403错误时，请使用Cookie版本**
 
 ## 功能特点
 
@@ -62,6 +65,20 @@ python tieba_scraper_simple.py "https://tieba.baidu.com/home/main?un=用户名" 
 ```
 
 **详细使用说明请参考** [USAGE_GUIDE.md](USAGE_GUIDE.md)
+
+### Cookie版本（推荐用于403错误）
+
+如果遇到403错误，使用Cookie版本：
+
+```bash
+# 方法1: 直接提供Cookie
+python tieba_scraper_cookie.py "URL" -c "你的Cookie字符串"
+
+# 方法2: 使用Cookie文件
+python tieba_scraper_cookie.py "URL" -f cookie.txt
+```
+
+**获取Cookie方法请参考** [USAGE_GUIDE.md](USAGE_GUIDE.md#cookie版本使用推荐用于遇到403错误时)
 
 ### 完整版
 

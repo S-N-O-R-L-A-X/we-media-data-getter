@@ -46,13 +46,14 @@ class TiebaScraperCookie:
             import random
             time.sleep(random.uniform(1.0, 3.0))
             
-            with urllib.request.urlopen(req, timeout=20) as response:
+            with urllib.request.urlopen(req, timeout=10) as response:
                 # 处理gzip压缩
                 if response.info().get('Content-Encoding') == 'gzip':
                     import gzip
                     content = gzip.decompress(response.read())
                 else:
                     content = response.read()
+                print(f"成功获取页面内容，长度: {len(content)}")
                 
                 # 尝试不同的编码
                 for encoding in ['utf-8', 'gbk', 'gb2312']:
