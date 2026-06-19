@@ -1,0 +1,2 @@
+[    1215ms] [VERBOSE] [DOM] Input elements should have autocomplete attributes (suggested: "new-password"): (More info: https://goo.gl/9p2vKq) %o @ https://passport.baidu.com/v2/?login&u=http%3A%2F%2Ftieba.baidu.com%2Fhome%2Fcreative%2Findex:0
+[   35526ms] [LOG] tiebaTrack========= {expose: , view: , click: , install: , page: } @ https://tb3.bdstatic.com/tb/pc/pc-common/static/js/base.8fc54b03.js:37968
