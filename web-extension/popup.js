@@ -100,7 +100,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     // 加载设置
     async function loadSettings() {
         return new Promise((resolve) => {
-            chrome.storage.sync.get({
+            chrome.storage.local.get({
                 cutoffDate: '2026-05-25',
                 maxPages: 42,
                 pageDelay: 3
@@ -115,7 +115,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     // 保存设置
     async function saveSettings() {
-        await chrome.storage.sync.set({
+        await chrome.storage.local.set({
             cutoffDate: cutoffDateInput.value,
             maxPages: parseInt(maxPagesInput.value),
             pageDelay: parseInt(pageDelayInput.value)

@@ -30,7 +30,65 @@ const TiebaExtractor = (function() {
         }
     }
 
-    // 从当前页面提取数据
+    // 从 Unix 时间戳（秒）转换为日期字符串 YYYY-MM-DD
+    function timestampToDate(timestamp) {
+        if (!timestamp) return '';
+        try {
+            const date = new Date(timestamp * 1000);
+            const year = date.getFullYear();
+            const month = String(date.getMonth() + 1).padStart(2, '0');
+            const day = String(date.getDate()).padStart(2, '0');
+            return `${year}-${month}-${day}`;
+        } catch (e) {
+            console.error('[TiebaExtractor] 时间戳转换失败:', e);
+            return '';
+        }
+    }
+
+    // 检查时间戳是否符合条件（大于等于 cutoffTimestamp）
+    function isValidTimestamp(timestamp) {
+        if (!timestamp) return false;
+        const cutoffTs = Math.floor(config.cutoffDate.getTime() / 1000);
+        return timestamp >= cutoffTs;
+    }
+
+    // === 通过 API 获取数据（推荐方法，不依赖 Vue）===
+    async function fetchDataFromAPI() {
+        console.log('[TiebaExtractor] 正在通过 API 获取数据...');
+
+        try {
+            const response = await fetch('https://tieba.baidu.com/mo/q/work/landing');
+            const result = await response.json();
+
+            if (result.no !== 0) {
+                console.error('[TiebaExtractor] API 请求失败:', result.error);
+                return { works: [], error: result.error };
+            }
+
+            const works = result.data?.works || [];
+            console.log(`[TiebaExtractor] ✅ API 返回了 ${works.length} 条数据`);
+
+            // 转换数据格式
+            const parsedData = works.map(work => ({
+                date: timestampToDate(work.publish_time),
+                url: `https://tieba.baidu.com/p/${work.thread_id}`,
+                title: decodeURIComponent(work.title),
+                playCount: work.play_count || 0,
+                agreeCount: work.agree_count || 0,
+                collectCount: work.collect_count || 0,
+                replyCount: work.comment_count || 0,
+                shareCount: work.share_count || 0,
+                raw: work // 原始数据，方便调试
+            }));
+
+            return { works: parsedData, error: null };
+        } catch (error) {
+            console.error('[TiebaExtractor] API 请求错误:', error);
+            return { works: [], error: error.message };
+        }
+    }
+
+    // 从当前页面提取数据（使用 API，替代 Vue 解析）
     function extractCurrentPageData() {
         const results = [];
         const items = document.querySelectorAll('.thread-cont');
@@ -118,13 +176,14 @@ const TiebaExtractor = (function() {
         return { success: true, count: allData.length };
     }
 
-    // 立即提取当前页
-    function extractNow() {
-        console.log('[TiebaExtractor] 正在提取当前页数据...');
-        const pageData = extractCurrentPageData();
+    // 立即从 API 提取数据
+    async function extractFromAPI() {
+        console.log('[TiebaExtractor] 正在从 API 提取数据...');
 
-        if (pageData.length === 0) {
-            const errorMsg = '未找到任何数据项，请确认是否在正确的贴吧列表页面 (https://tieba.baidu.com/home/creative/work)';
+        const apiResult = await fetchDataFromAPI();
+
+        if (apiResult.error || apiResult.works.length === 0) {
+            const errorMsg = apiResult.error || '未找到任何数据项';
             console.error('[TiebaExtractor]', errorMsg);
             
             chrome.runtime.sendMessage({
@@ -136,10 +195,11 @@ const TiebaExtractor = (function() {
             return { success: false, message: errorMsg };
         }
 
-        const filtered = filterByDate(pageData);
+        // 筛选符合日期的数据
+        const filtered = apiResult.works.filter(item => isValidTimestamp(item.raw?.publish_time));
         allData = allData.concat(filtered);
 
-        console.log(`[TiebaExtractor] 📊 本次提取：${pageData.length} 条，符合条件：${filtered.length} 条`);
+        console.log(`[TiebaExtractor] 📊 本次提取：${apiResult.works.length} 条，符合条件：${filtered.length} 条`);
         console.log(`[TiebaExtractor] 💾 累计数据：${allData.length} 条`);
 
         // 发送更新到 popup
@@ -151,10 +211,16 @@ const TiebaExtractor = (function() {
 
         return {
             success: true,
-            current: pageData.length,
+            current: apiResult.works.length,
             filtered: filtered.length,
             total: allData.length
         };
+    }
+
+    // 立即提取当前页（保留用于兼容性）
+    function extractNow() {
+        // 默认使用 API 方式
+        return extractFromAPI();
     }
 
     // 点击下一页按钮
@@ -222,8 +288,49 @@ const TiebaExtractor = (function() {
         return 'timeout';
     }
 
-    // 自动遍历多页
-    async function startAutoExtraction(pages = null) {
+    // 通过 API 获取指定页的数据
+    async function fetchDataFromAPIWithPage(pageNumber) {
+        // 构建带分页参数的 URL
+        const url = new URL('https://tieba.baidu.com/mo/q/work/landing');
+        url.searchParams.set('page', pageNumber);
+        
+        console.log(`[TiebaExtractor] 正在通过 API 获取第 ${pageNumber} 页数据...`);
+
+        try {
+            const response = await fetch(url.toString());
+            const result = await response.json();
+
+            if (result.no !== 0) {
+                console.error('[TiebaExtractor] API 请求失败:', result.error);
+                return { works: [], error: result.error };
+            }
+
+            const works = result.data?.works || [];
+            
+            console.log(`[TiebaExtractor] ✅ API 返回了 ${works.length} 条数据`);
+
+            // 转换数据格式
+            const parsedData = works.map(work => ({
+                date: timestampToDate(work.publish_time),
+                url: `https://tieba.baidu.com/p/${work.thread_id}`,
+                title: decodeURIComponent(work.title),
+                playCount: work.play_count || 0,
+                agreeCount: work.agree_count || 0,
+                collectCount: work.collect_count || 0,
+                replyCount: work.comment_count || 0,
+                shareCount: work.share_count || 0,
+                raw: work // 原始数据，方便调试
+            }));
+
+            return { works: parsedData, error: null };
+        } catch (error) {
+            console.error('[TiebaExtractor] API 请求错误:', error);
+            return { works: [], error: error.messagee };
+        }
+    }
+
+    // 通过 API 方式自动提取（支持自动翻页）
+    async function startAutoExtraction() {
         if (isRunning) {
             const error = '正在进行抓取，请稍后再试';
             console.error('[TiebaExtractor]', error);
@@ -235,103 +342,97 @@ const TiebaExtractor = (function() {
             return { success: false, message: error };
         }
 
-        const totalPages = pages || config.maxPages;
         isRunning = true;
         allData = [];
         currentPage = 1;
 
-        console.log('[TiebaExtractor] 🚀 开始自动抓取...');
-        console.log(`[TiebaExtractor] 目标页数：${totalPages}`);
+        console.log('[TiebaExtractor] 🚀 开始自动抓取（使用 API 翻页）...');
 
         // 通知背景页面抓取开始
         chrome.runtime.sendMessage({
             action: 'extractionStarted',
-            totalPages: totalPages
+            totalPages: config.maxPages
         }).catch(console.error);
 
-        for (currentPage = 1; currentPage <= totalPages && isRunning; currentPage++) {
-            console.log(`\n[TiebaExtractor] ========== 正在处理第 ${currentPage} 页 ========== \n`);
+        try {
+            const maxPages = config.maxPages;
+            let page = 1;
+            console.log(`maxpages: ${maxPages}`);
+            while (page <= maxPages && isRunning) {
+                console.log(`\n[TiebaExtractor] === 正在获取第 ${page} 页数据 ===`);
 
-            const pageData = extractCurrentPageData();
+                // 通过 API 获取当前页数据
+                const apiResult = await fetchDataFromAPIWithPage(page);
 
-            if (pageData.length === 0) {
-                console.log('[TiebaExtractor] ⚠️ 未找到数据项，停止抓取');
-                break;
-            }
-
-            // 先检查本页第一条数据的日期
-            let isFirstItemUnderCutoff = false;
-            if (pageData.length > 0) {
-                const firstItem = pageData[0];
-                const firstItemDate = parseDate(firstItem.date);
-                if (firstItemDate && firstItemDate < config.cutoffDate) {
-                    isFirstItemUnderCutoff = true;
-                }
-            }
-
-            const filtered = filterByDate(pageData);
-            allData = allData.concat(filtered);
-
-            console.log(`[TiebaExtractor] ✅ 第 ${currentPage} 页：${pageData.length} 条，符合条件：${filtered.length} 条`);
-            console.log(`[TiebaExtractor] 📊 累计：${allData.length} 条\n`);
-
-            // 如果本页第一条数据已低于 cutoffDate，说明已经抓完所有符合条件的数据
-            if (isFirstItemUnderCutoff) {
-                console.log('[TiebaExtractor] 🏁 已抓取到 cutoffDate 之前的数据，停止抓取');
-                isRunning = false;
-
-                // 通知完成
-                chrome.runtime.sendMessage({
-                    action: 'extractionComplete',
-                    totalCount: allData.length
-                }).catch(console.error);
-
-                return { success: true, totalCount: allData.length };
-            }
-
-            const prevItemCount = pageData.length;
-
-            // 如果还需要继续，点击下一页
-            if (currentPage < totalPages) {
-                console.log(`[TiebaExtractor] ⏳ 等待 ${config.autoPageDelay / 1000} 秒后切换到第 ${currentPage + 1} 页...`);
-                await new Promise(r => setTimeout(r, config.autoPageDelay));
-
-                if (!clickNextPage()) {
-                    console.log('[TiebaExtractor] ⚠️ 找不到下一页按钮，可能已在最后一页');
-                    isRunning = false;
+                if (apiResult.error || apiResult.works.length === 0) {
+                    if (apiResult.error) {
+                        console.error('[TiebaExtractor]', apiResult.error);
+                    }
+                    // API 返回错误或空数据时停止
                     break;
                 }
 
-                // 等待页面加载
-                const result = await waitForPageLoad(prevItemCount);
-                if (result === 'last-page' || result === 'timeout') {
-                    isRunning = false;
-                    break;
+                // 计算新增数据（排除重复 URL）
+                const existingUrls = new Set(allData.map(item => item.url));
+                const newWorks = apiResult.works.filter(work => !existingUrls.has(work.url));
+                
+                if (newWorks.length > 0) {
+                    // 筛选符合日期的数据
+                    const filtered = newWorks.filter(item => {
+                        if (!item.date) return false;
+                        const itemDate = parseDate(item.date);
+                        return itemDate && itemDate >= config.cutoffDate;
+                    });
+                    
+                    allData = allData.concat(filtered);
+                    
+                    // 每获取一页后发送更新
+                    chrome.runtime.sendMessage({
+                        action: 'updateExtractedData',
+                        count: filtered.length,
+                        total: allData.length
+                    }).catch(console.error);
+                } else {
+                    console.log(`[TiebaExtractor] △ 第 ${page} 页没有新数据`);
                 }
 
-                currentPage++;
+                
+                page++;
             }
+
+            // 按日期降序排序
+            allData.sort((a, b) => b.date.localeCompare(a.date));
+
+            // 分批保存数据到 storage (避免配额超限)
+            try {
+                // 将大数据拆分成多个小条目保存
+                const batchKey = 'tiebaData_batch';
+                await chrome.storage.local.set({ [batchKey]: allData });
+                console.log(`[TiebaExtractor] ✅ 数据已保存到本地存储 (${allData.length} 条)`);
+            } catch (storageError) {
+                console.error('[TiebaExtractor] 保存数据失败:', storageError);
+                // 如果 local 存储也超限，只保存前 100 条
+                if (allData.length > 100) {
+                    await chrome.storage.local.set({ [batchKey]: allData.slice(0, 100) });
+                    console.log(`[TiebaExtractor] ⚠️ 数据被截断为前 100 条`);
+                }
+            }
+
+            // 通知背景页面
+            chrome.runtime.sendMessage({
+                action: 'extractionComplete',
+                totalCount: allData.length
+            }).catch(console.error);
+
+            isRunning = false;
+
+            console.log(`[TiebaExtractor] 🎉 自动抓取完成！共提取 ${allData.length} 条数据`);
+            return { success: true, totalCount: allData.length };
+        } catch (error) {
+            console.error('[TiebaExtractor] 抓取失败:', error);
+            isRunning = false;
+            return { success: false, error: error.message };
         }
-
-        isRunning = false;
-
-        console.log('\n[TiebaExtractor] ========== 抓取完成 ==========');
-        console.log(`[TiebaExtractor] 📦 总共提取 ${allData.length} 条符合日期条件的数据`);
-
-        // 保存到 storage
-        chrome.storage.sync.set({ tiebaData: allData })
-            .then(() => {
-                console.log('[TiebaExtractor] ✅ 数据已保存到本地存储');
-            })
-            .catch(console.error);
-
-        // 通知背景页面
-        chrome.runtime.sendMessage({
-            action: 'extractionComplete',
-            totalCount: allData.length
-        }).catch(console.error);
-
-        return { success: true, totalCount: allData.length };
     }
 
     // 停止抓取
@@ -449,13 +550,3 @@ window.tiebaExtractor = TiebaExtractor;
 
 // 日志消息
 console.log('[TiebaExtractor] === 百度贴吧视频数据提取器已加载 ===');
-console.log('[TiebaExtractor] 可用命令:');
-console.log('[TiebaExtractor]   tiebaExtractor.extractNow()      - 提取当前页数据');
-console.log('[TiebaExtractor]   tiebaExtractor.startAutoExtraction(n) - 自动抓取 n 页 (默认 42 页)');
-console.log('[TiebaExtractor]   tiebaExtractor.stopExtraction()     - 停止抓取');
-console.log('[TiebaExtractor]   tiebaExtractor.exportToCSV()        - 导出 CSV 文件');
-console.log('[TiebaExtractor]   tiebaExtractor.clearData()          - 清空数据');
-console.log('[TiebaExtractor]   tiebaExtractor.getAllData()         - 获取所有数据');
-console.log('[TiebaExtractor]   tiebaExtractor.getStatus()          - 获取状态信息');
-console.log('[TiebaExtractor]   tiebaExtractor.setConfig(cfg)       - 设置配置');
-console.log('');

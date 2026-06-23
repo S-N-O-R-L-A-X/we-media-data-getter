@@ -35,22 +35,22 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             break;
 
         case 'saveData':
-            // 保存数据到 storage
-            chrome.storage.sync.set({ tiebaData: message.data })
+            // 保存数据到 storage.local (避免 sync 配额限制)
+            chrome.storage.local.set({ tiebaData: message.data })
                 .then(() => sendResponse({ success: true }))
                 .catch(err => sendResponse({ success: false, error: err.message }));
             return true; // 异步响应
 
         case 'getData':
             // 获取已保存的数据
-            chrome.storage.sync.get(['tiebaData'])
+            chrome.storage.local.get(['tiebaData'])
                 .then(result => sendResponse({ data: result.tiebaData || [] }))
                 .catch(err => sendResponse({ success: false, error: err.message }));
             return true; // 异步响应
 
         case 'clearData':
             // 清空数据
-            chrome.storage.sync.remove('tiebaData')
+            chrome.storage.local.remove('tiebaData')
                 .then(() => sendResponse({ success: true }))
                 .catch(err => sendResponse({ success: false, error: err.message }));
             return true; // 异步响应
