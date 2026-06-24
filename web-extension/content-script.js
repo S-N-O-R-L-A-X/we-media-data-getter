@@ -53,11 +53,17 @@ const TiebaExtractor = (function() {
     }
 
     // === 通过 API 获取数据（推荐方法，不依赖 Vue）===
-    async function fetchDataFromAPI() {
-        console.log('[TiebaExtractor] 正在通过 API 获取数据...');
+    async function fetchDataFromAPI(pageNumber = 1) {
+        console.log(`[TiebaExtractor] 正在通过 API 获取第 ${pageNumber} 页数据...`);
 
         try {
-            const response = await fetch('https://tieba.baidu.com/mo/q/work/landing');
+            // 构建带分页和每页数据数量的 URL
+            const url = new URL('https://tieba.baidu.com/mo/q/work/list');
+            url.searchParams.set('type', "all");
+            url.searchParams.set('pn', pageNumber);
+            url.searchParams.set('rn', 10); // 设置每页数据条数
+            
+            const response = await fetch(url.toString());
             const result = await response.json();
 
             if (result.no !== 0) {
@@ -66,7 +72,7 @@ const TiebaExtractor = (function() {
             }
 
             const works = result.data?.works || [];
-            console.log(`[TiebaExtractor] ✅ API 返回了 ${works.length} 条数据`);
+            console.log(`[TiebaExtractor] ✅ API 返回了 ${works.length} 条数据（第 ${pageNumber} 页）`);
 
             // 转换数据格式
             const parsedData = works.map(work => ({
@@ -75,8 +81,8 @@ const TiebaExtractor = (function() {
                 title: decodeURIComponent(work.title),
                 playCount: work.play_count || 0,
                 agreeCount: work.agree_count || 0,
+                commentCount: work.comment_count || 0,
                 collectCount: work.collect_count || 0,
-                replyCount: work.comment_count || 0,
                 shareCount: work.share_count || 0,
                 raw: work // 原始数据，方便调试
             }));
@@ -114,6 +120,7 @@ const TiebaExtractor = (function() {
                     title: props.title || '',
                     playCount: parseInt(props.playCount) || 0,
                     agreeCount: parseInt(props.agreeCount) || 0,
+                    commentCount: parseInt(props.commentCount) || 0,
                     collectCount: parseInt(props.collectCount) || 0,
                     replyCount: parseInt(props.replyCount) || 0,
                     shareCount: el.getAttribute('share-count') || '0'
@@ -137,19 +144,40 @@ const TiebaExtractor = (function() {
         });
     }
 
-    // 导出为 CSV
-    function exportToCSV() {
-        if (allData.length === 0) {
+    // 导出为 CSV（支持从 storage 加载完整数据）
+    async function exportToCSV() {
+        // 先从 storage 加载所有数据（如果存在）
+        let dataToExport = [];
+        
+        try {
+            const result = await new Promise((resolve) => {
+                chrome.storage.local.get(['tiebaData_batch'], (result) => {
+                    resolve(result);
+                });
+            });
+            
+            // 优先使用 storage 中的数据（可能是持久化的完整数据）
+            if (result.tiebaData_batch && result.tiebaData_batch.length > 0) {
+                console.log(`[TiebaExtractor] 从 storage 加载了 ${result.tiebaData_batch.length} 条数据进行导出`);
+                dataToExport = result.tiebaData_batch.reverse(); 
+            } else if (allData.length > 0) {
+                console.log(`[TiebaExtractor] 从内存中使用 ${allData.length} 条数据进行导出`);
+                dataToExport = allData.reverse();
+            }
+        } catch (error) {
+            console.error('[TiebaExtractor] 从 storage 加载数据失败:', error);
+            // 如果 loading 失败，回退到使用内存数据
+            dataToExport = allData;
+        }
+        
+        if (dataToExport.length === 0) {
             return { success: false, message: '暂无数据可导出！' };
         }
 
-        // 按日期降序排序
-        allData.sort((a, b) => b.date.localeCompare(a.date));
-
         // 构建 CSV
-        let csv = '\uFEFF' + '发布日期，视频标题，视频链接，浏览数，点赞数，收藏数，回复数，分享数\n';
-        allData.forEach(item => {
-            csv += `"${item.date}","${(item.title || '').replace(/"/g, '""')}","${item.url}",${item.playCount},${item.agreeCount},${item.collectCount},${item.replyCount},${item.shareCount}\n`;
+        let csv = '\uFEFF' + '发布日期，视频标题，视频链接，浏览数，点赞数，评论数，收藏数，分享数\n';
+        dataToExport.forEach(item => {
+            csv += `"${item.date}","${(item.title || '').replace(/"/g, '""')}","${item.url}",${item.playCount},${item.agreeCount},${item.commentCount},${item.collectCount},${item.shareCount}\n`;
         });
 
         // 触发下载
@@ -165,15 +193,15 @@ const TiebaExtractor = (function() {
             URL.revokeObjectURL(url);
         }, 100);
 
-        console.log(`[TiebaExtractor] ✅ 已导出 ${allData.length} 条数据到 CSV 文件`);
+        console.log(`[TiebaExtractor] ✅ 已导出 ${dataToExport.length} 条数据到 CSV 文件`);
         
         // 发送到背景服务 worker
         chrome.runtime.sendMessage({
             action: 'showNotification',
-            message: `成功导出 ${allData.length} 条数据！`
+            message: `成功导出 ${dataToExport.length} 条数据！`
         }).catch(console.error);
 
-        return { success: true, count: allData.length };
+        return { success: true, count: dataToExport.length };
     }
 
     // 立即从 API 提取数据
@@ -288,45 +316,11 @@ const TiebaExtractor = (function() {
         return 'timeout';
     }
 
-    // 通过 API 获取指定页的数据
+    // 通过 API 获取指定页的数据（已废弃，统一使用 fetchDataFromAPI）
     async function fetchDataFromAPIWithPage(pageNumber) {
-        // 构建带分页参数的 URL
-        const url = new URL('https://tieba.baidu.com/mo/q/work/landing');
-        url.searchParams.set('page', pageNumber);
-        
-        console.log(`[TiebaExtractor] 正在通过 API 获取第 ${pageNumber} 页数据...`);
-
-        try {
-            const response = await fetch(url.toString());
-            const result = await response.json();
-
-            if (result.no !== 0) {
-                console.error('[TiebaExtractor] API 请求失败:', result.error);
-                return { works: [], error: result.error };
-            }
-
-            const works = result.data?.works || [];
-            
-            console.log(`[TiebaExtractor] ✅ API 返回了 ${works.length} 条数据`);
-
-            // 转换数据格式
-            const parsedData = works.map(work => ({
-                date: timestampToDate(work.publish_time),
-                url: `https://tieba.baidu.com/p/${work.thread_id}`,
-                title: decodeURIComponent(work.title),
-                playCount: work.play_count || 0,
-                agreeCount: work.agree_count || 0,
-                collectCount: work.collect_count || 0,
-                replyCount: work.comment_count || 0,
-                shareCount: work.share_count || 0,
-                raw: work // 原始数据，方便调试
-            }));
-
-            return { works: parsedData, error: null };
-        } catch (error) {
-            console.error('[TiebaExtractor] API 请求错误:', error);
-            return { works: [], error: error.messagee };
-        }
+        // 为保持向后兼容，调用主 API 函数
+        console.warn('[TiebaExtractor] fetchDataFromAPIWithPage 已废弃，请使用 fetchDataFromAPI');
+        return fetchDataFromAPI(pageNumber);
     }
 
     // 通过 API 方式自动提取（支持自动翻页）
@@ -372,18 +366,41 @@ const TiebaExtractor = (function() {
                     break;
                 }
 
+                console.log(apiResult.works);
                 // 计算新增数据（排除重复 URL）
                 const existingUrls = new Set(allData.map(item => item.url));
                 const newWorks = apiResult.works.filter(work => !existingUrls.has(work.url));
                 
                 if (newWorks.length > 0) {
-                    // 筛选符合日期的数据
+                    // 筛选符合日期的数据 - 使用 Unix 时间戳直接比较（更准确）
                     const filtered = newWorks.filter(item => {
-                        if (!item.date) return false;
-                        const itemDate = parseDate(item.date);
-                        return itemDate && itemDate >= config.cutoffDate;
+                        if (!item.raw?.publish_time) return false;
+                        return isValidTimestamp(item.raw.publish_time);
                     });
                     
+                    // 检查是否还有有效数据 - 如果本页没有符合条件的，说明已经超过截止日期的范围
+                    // 由于数据是按最新在前排序的，后面页面肯定也都是旧数据
+                    if (filtered.length === 0) {
+                        console.log(`[TiebaExtractor] ⏹️ 第 ${page} 页已无符合截止日期的数据，停止抓取`);
+                        
+                        // 保存已有的数据
+                        try {
+                            const batchKey = 'tiebaData_batch';
+                            await chrome.storage.local.set({ [batchKey]: allData });
+                            console.log(`[TiebaExtractor] ✅ 数据已保存到本地存储 (${allData.length} 条)`);
+                        } catch (storageError) {
+                            console.error('[TiebaExtractor] 保存数据失败:', storageError);
+                        }
+                        
+                        isRunning = false;
+                        return { 
+                            success: true, 
+                            totalCount: allData.length,
+                            message: `在第 ${page} 页检测到已超过截止日期的数据，停止抓取`
+                        };
+                    }
+                    
+                    console.log(`[TiebaExtractor] 📊 第 ${page} 页符合条件的有 ${filtered.length} 条`);
                     allData = allData.concat(filtered);
                     
                     // 每获取一页后发送更新
@@ -392,6 +409,13 @@ const TiebaExtractor = (function() {
                         count: filtered.length,
                         total: allData.length
                     }).catch(console.error);
+                    
+                    // 调试信息：显示本页最后一条数据的日期
+                    const lastItemInPage = newWorks[newWorks.length - 1];
+                    if (lastItemInPage?.raw?.publish_time) {
+                        const lastDateStr = timestampToDate(lastItemInPage.raw.publish_time);
+                        console.log(`[TiebaExtractor] 第 ${page} 页最后一条数据日期：${lastDateStr}`);
+                    }
                 } else {
                     console.log(`[TiebaExtractor] △ 第 ${page} 页没有新数据`);
                 }
@@ -525,9 +549,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             break;
             
         case 'exportToCSV':
-            const exportResult = TiebaExtractor.exportToCSV();
-            sendResponse(exportResult);
-            break;
+            // exportToCSV 现在是异步函数，需要等待 Promise 完成
+            TiebaExtractor.exportToCSV().then(result => {
+                sendResponse(result);
+            }).catch(err => {
+                sendResponse({ success: false, error: err.message });
+            });
+            return true; // 保持通道打开以支持异步响应
             
         case 'clearData':
             const clearResult = TiebaExtractor.clearData();
