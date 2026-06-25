@@ -245,83 +245,6 @@ const TiebaExtractor = (function() {
         };
     }
 
-    // 立即提取当前页（保留用于兼容性）
-    function extractNow() {
-        // 默认使用 API 方式
-        return extractFromAPI();
-    }
-
-    // 点击下一页按钮
-    function clickNextPage() {
-        const allPageSpans = Array.from(document.querySelectorAll('.tbv-pagination-wrap span'));
-
-        // 找下一个页码按钮
-        const nextPageSpan = allPageSpans.find(el => el.textContent.trim() == String(currentPage + 1));
-
-        if (!nextPageSpan) {
-            // 尝试查找是否有 "下一页" 或 ">" 按钮
-            const nextButton = allPageSpans.find(el =>
-                el.textContent.includes('下一页') ||
-                el.textContent.includes('>') ||
-                el.textContent.includes('Next')
-            );
-            if (nextButton) {
-                console.log('[TiebaExtractor] 使用"下一页"按钮');
-                nextButton.click();
-                return true;
-            }
-            return false;
-        } else {
-            console.log(`[TiebaExtractor] 👉 正在点击第 ${currentPage + 1} 页...`);
-            nextPageSpan.click();
-            return true;
-        }
-    }
-
-    // 检查是否到达最后一页
-    function checkIsLastPage() {
-        const currentPageSpan = Array.from(document.querySelectorAll('.tbv-pagination-wrap span')).find(el => {
-            const text = el.textContent.trim();
-            return text === String(currentPage) || text.match(/^\d+$/)?.[0] === String(currentPage);
-        });
-        return currentPageSpan && (
-            currentPageSpan.className?.includes('cur') ||
-            currentPageSpan.className?.includes('current') ||
-            currentPageSpan?.getAttribute('class')?.includes('current')
-        );
-    }
-
-    // 等待页面加载完成
-    async function waitForPageLoad(prevItemCount) {
-        const startTime = Date.now();
-        const prevItemCountRef = prevItemCount;
-
-        while (Date.now() - startTime < config.waitForPageLoadTimeout) {
-            await new Promise(r => setTimeout(r, 500));
-
-            const newData = extractCurrentPageData();
-
-            if (newData.length !== prevItemCountRef && newData.length > 0) {
-                console.log(`[TiebaExtractor] ✅ 检测到新页面（${newData.length} 条数据 vs 原 ${prevItemCountRef} 条）`);
-                return true;
-            }
-
-            if (checkIsLastPage()) {
-                console.log('[TiebaExtractor] 🏁 确认已在最后一页');
-                return 'last-page';
-            }
-        }
-
-        console.log('[TiebaExtractor] ⚠️ 页面似乎没有变化，可能已到达最后一页或卡住');
-        return 'timeout';
-    }
-
-    // 通过 API 获取指定页的数据（已废弃，统一使用 fetchDataFromAPI）
-    async function fetchDataFromAPIWithPage(pageNumber) {
-        // 为保持向后兼容，调用主 API 函数
-        console.warn('[TiebaExtractor] fetchDataFromAPIWithPage 已废弃，请使用 fetchDataFromAPI');
-        return fetchDataFromAPI(pageNumber);
-    }
 
     // 通过 API 方式自动提取（支持自动翻页）
     async function startAutoExtraction() {
@@ -356,7 +279,7 @@ const TiebaExtractor = (function() {
                 console.log(`\n[TiebaExtractor] === 正在获取第 ${page} 页数据 ===`);
 
                 // 通过 API 获取当前页数据
-                const apiResult = await fetchDataFromAPIWithPage(page);
+                const apiResult = await fetchDataFromAPI(page);
 
                 if (apiResult.error || apiResult.works.length === 0) {
                     if (apiResult.error) {
@@ -490,15 +413,6 @@ const TiebaExtractor = (function() {
         return { success: true };
     }
 
-    // 获取状态信息
-    function getStatus() {
-        return {
-            isRunning: isRunning,
-            currentPage: currentPage,
-            totalExtracted: allData.length
-        };
-    }
-
     // 设置配置
     function setConfig(newConfig) {
         Object.assign(config, newConfig);
@@ -508,13 +422,11 @@ const TiebaExtractor = (function() {
 
     // 暴露公共 API
     return {
-        extractNow,
         startAutoExtraction,
         stopExtraction,
         exportToCSV,
         getAllData,
         clearData,
-        getStatus,
         setConfig
     };
 })();
@@ -527,11 +439,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     console.log('[TiebaExtractor] Content Script received message:', message);
     
     switch (message.action) {
-        case 'extractNow':
-            const extractResult = TiebaExtractor.extractNow();
-            sendResponse(extractResult);
-            break;
-            
         case 'startAutoExtraction':
             const pages = message.pages || 42;
             const autoResult = TiebaExtractor.startAutoExtraction(pages);
@@ -560,11 +467,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         case 'clearData':
             const clearResult = TiebaExtractor.clearData();
             sendResponse(clearResult);
-            break;
-            
-        case 'getStatus':
-            const status = TiebaExtractor.getStatus();
-            sendResponse(status);
             break;
             
         default:

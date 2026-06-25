@@ -8,9 +8,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     const totalCountEl = document.getElementById('totalCount');
     const extractionStatusEl = document.getElementById('extractionStatus');
     
-    const extractBtn = document.getElementById('extractBtn');
     const startAutoBtn = document.getElementById('startAutoBtn');
-    const stopAutoBtn = document.getElementById('stopAutoBtn');
     const exportCsvBtn = document.getElementById('exportCsvBtn');
     const clearDataBtn = document.getElementById('clearDataBtn');
     
@@ -78,14 +76,11 @@ document.addEventListener('DOMContentLoaded', async () => {
         if (isRunning) {
             extractionStatusEl.textContent = '抓取中...';
             extractionStatusEl.className = 'status-badge running';
-            extractBtn.disabled = true;
             startAutoBtn.disabled = true;
-            stopAutoBtn.disabled = false;
             exportCsvBtn.disabled = true;
         } else {
             extractionStatusEl.textContent = '空闲';
             extractionStatusEl.className = 'status-badge idle';
-            extractBtn.disabled = false;
             startAutoBtn.disabled = false;
             stopAutoBtn.disabled = true;
             
@@ -236,9 +231,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
 
     // 绑定事件
-    extractBtn.addEventListener('click', extractCurrentPage);
     startAutoBtn.addEventListener('click', startAutoExtraction);
-    stopAutoBtn.addEventListener('click', stopExtraction);
     exportCsvBtn.addEventListener('click', exportCSV);
     clearDataBtn.addEventListener('click', clearData);
     saveSettingsBtn.addEventListener('click', saveSettings);
