@@ -5,8 +5,8 @@
 }
 
 body {
-    width: 380px;
-    min-width: 320px;
+    width: 520px;
+    min-width: 400px;
     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
     font-size: 14px;
     color: #333;
@@ -14,6 +14,9 @@ body {
 }
 
 .container {
+    width: 100%;
+    max-width: 520px;
+    margin: 0 auto;
     padding: 16px;
 }
 
@@ -34,7 +37,7 @@ header h1 {
     flex-direction: column;
     gap: 8px;
     padding: 12px;
-    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    background: linear-gradient(135deg, #667eea 0%, #3d1f5c 100%);
     border-radius: 8px;
     color: white;
     margin-bottom: 16px;

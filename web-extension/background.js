@@ -1,62 +1,65 @@
 // ============================================
-// 百度贴吧视频数据提取器 - Background Service Worker
+// 百度贴吧 & 抖音视频数据提取器 - Background Service Worker
 // ============================================
 
-console.log('[TiebaExtractor] Background service worker started');
+console.log('[Extractor] Background service worker started');
 
 // Manifest V3 需要返回 true 以支持异步响应
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-    console.log('[TiebaExtractor] Received message:', message);
+    console.log('[Extractor] Received message:', message);
 
     switch (message.action) {
         case 'showNotification':
-            // 使用 chrome.action.openPopup() 显示通知而不是 chrome.notifications
-            console.log('[TiebaExtractor] Notification:', message.message);
+            // 使用 chrome.action.setBadgeText 显示通知
+            console.log('[Extractor] Notification:', message.message);
             sendResponse({ success: true });
-            return true; // 保持消息通道打开以支持异步响应
-            break;
+            return true;
 
         case 'updateExtractedData':
-            // 更新提取数据统计
-            updateExtractionStats(message.count, message.total);
+            // 更新贴吧提取数据统计
+            updateExtractionStats('tieba', message.count, message.total);
+            sendResponse({ success: true });
+            break;
+
+        case 'updateDouyinData':
+            // 更新抖音提取数据统计
+            updateExtractionStats('douyin', message.count, message.total);
             sendResponse({ success: true });
             break;
 
         case 'extractionStarted':
-            // 记录抓取开始
-            recordExtractionStart(message.totalPages);
+            // 记录贴吧抓取开始
+            recordExtractionStart('tieba', message.totalPages);
+            sendResponse({ success: true });
+            break;
+
+        case 'douyinExtractionStarted':
+            // 记录抖音抓取开始
+            recordExtractionStart('douyin', message.totalPages);
             sendResponse({ success: true });
             break;
 
         case 'extractionComplete':
-            // 记录抓取完成
-            recordExtractionComplete(message.totalCount);
+            // 记录贴吧抓取完成
+            recordExtractionComplete('tieba', message.totalCount);
             sendResponse({ success: true });
             break;
 
-        case 'saveData':
-            // 保存数据到 storage.local (避免 sync 配额限制)
-            chrome.storage.local.set({ tiebaData: message.data })
-                .then(() => sendResponse({ success: true }))
-                .catch(err => sendResponse({ success: false, error: err.message }));
-            return true; // 异步响应
-
-        case 'getData':
-            // 获取已保存的数据
-            chrome.storage.local.get(['tiebaData'])
-                .then(result => sendResponse({ data: result.tiebaData || [] }))
-                .catch(err => sendResponse({ success: false, error: err.message }));
-            return true; // 异步响应
+        case 'douyinExtractionComplete':
+            // 记录抖音抓取完成
+            recordExtractionComplete('douyin', message.totalCount);
+            sendResponse({ success: true });
+            break;
 
         case 'clearData':
             // 清空数据
-            chrome.storage.local.remove('tiebaData')
+            chrome.storage.local.remove(['tiebaData_batch', 'douyinData_batch'])
                 .then(() => sendResponse({ success: true }))
                 .catch(err => sendResponse({ success: false, error: err.message }));
-            return true; // 异步响应
+            return true;
 
         default:
-            console.warn('[TiebaExtractor] Unknown action:', message.action);
+            console.warn('[Extractor] Unknown action:', message.action);
             sendResponse({ success: false, error: 'Unknown action' });
     }
 });
@@ -70,23 +73,25 @@ function updateBadge(text) {
 // 更新提取统计
 let extractionStats = {
     currentTotal: 0,
-    lastUpdate: null
+    lastUpdate: null,
+    platform: 'tieba'
 };
 
-function updateExtractionStats(countAdded, newTotal) {
+function updateExtractionStats(platform, countAdded, newTotal) {
     extractionStats.currentTotal = newTotal;
+    extractionStats.platform = platform;
     extractionStats.lastUpdate = new Date().toISOString();
-    console.log('[TiebaExtractor] Stats updated:', extractionStats);
+    console.log(`[Extractor] Stats updated (${platform}):`, extractionStats);
 }
 
 // 记录抓取开始
-function recordExtractionStart(totalPages) {
-    console.log('[TiebaExtractor] Extraction started, target pages:', totalPages);
+function recordExtractionStart(platform, totalPages) {
+    console.log(`[Extractor] ${platform} Extraction started, target pages:`, totalPages);
 }
 
 // 记录抓取完成
-function recordExtractionComplete(totalCount) {
-    console.log('[TiebaExtractor] Extraction completed, total items:', totalCount);
+function recordExtractionComplete(platform, totalCount) {
+    console.log(`[Extractor] ${platform} Extraction completed, total items:`, totalCount);
 }
 
 // 初始化扩展图标状态
@@ -113,12 +118,19 @@ function updateExtensionIcon(isRunning) {
 // 监听标签页更新，自动注入脚本
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
     if (changeInfo.status === 'complete' && tab.url) {
-        if (tab.url.startsWith('https://tieba.baidu.com/home/creative/work')) {
-            // 检查是否已经注入了脚本
-            chrome.tabs.get(tabId, (tabDetails) => {
-                if (tabDetails) {
-                    console.log('[TiebaExtractor] Tab updated, url:', tab.url);
-                }
+        const url = tab.url;
+        
+        // 检查是否是贴吧或抖音页面
+        if (url.startsWith('https://tieba.baidu.com/home/creative/work') || 
+            url.includes('creator.douyin.com/janus/douyin/creator/pc/work_list')) {
+            console.log('[Extractor] Tab updated, url:', url);
+            
+            // 注入 content script
+            chrome.scripting.executeScript({
+                target: { tabId: tabId },
+                files: ['content-script.js']
+            }).catch(err => {
+                console.error('[Extractor] Failed to inject script:', err);
             });
         }
     }
@@ -127,11 +139,11 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
 // 扩展安装或更新时打开欢迎页面
 chrome.runtime.onInstalled.addListener((details) => {
     if (details.reason === 'install') {
-        console.log('[TiebaExtractor] Extension installed');
+        console.log('[Extractor] Extension installed');
         chrome.tabs.create({ url: 'welcome.html' });
     } else if (details.reason === 'update') {
-        console.log('[TiebaExtractor] Extension updated to version', details.version);
+        console.log('[Extractor] Extension updated to version', details.version);
     }
 });
 
-console.log('[TiebaExtractor] Background service worker initialized');
+console.log('[Extractor] Background service worker initialized');

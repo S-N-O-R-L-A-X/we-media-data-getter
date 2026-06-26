@@ -1,34 +1,32 @@
 {
   "manifest_version": 3,
-  "name": "Tieba Data Extractor",
+  "name": "We-Media Data Extractor",
   "version": "1.0.0",
-  "description": "百度贴吧视频数据提取器 - Chrome Extension 版本",
+  "description": "自媒体视频数据提取器 - 支持百度贴吧和抖音创作者服务平台",
   "permissions": [
     "activeTab",
     "storage",
-    "downloads"
+    "scripting"
   ],
   "host_permissions": [
-    "https://tieba.baidu.com/*"
-  ],
-  "content_scripts": [
-    {
-      "matches": ["https://tieba.baidu.com/home/creative/work"],
-      "js": ["content-script.js"],
-      "all_frames": true,
-      "run_at": "document_idle"
-    }
+    "https://tieba.baidu.com/*",
+    "https://creator.douyin.com/*"
   ],
   "background": {
     "service_worker": "background.js"
   },
   "action": {
     "default_popup": "popup.html",
+    "default_title": "视频数据提取器",
     "default_icon": {
       "16": "icons/icon-16.svg",
       "48": "icons/icon-48.svg",
       "128": "icons/icon-128.svg"
     }
+  },
+  "browser_action": {
+    "default_popup": "popup.html",
+    "default_title": "视频数据提取器"
   },
   "icons": {
     "16": "icons/icon-16.svg",
