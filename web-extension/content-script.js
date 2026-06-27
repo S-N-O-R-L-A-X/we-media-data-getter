@@ -18,6 +18,7 @@ const TiebaExtractor = (function() {
 
     let allData = [];
     let currentPage = 1;
+    let totalPagesProcessed = 0;
     let isRunning = false;
 
     function parseDate(dateStr) {
@@ -120,6 +121,20 @@ const TiebaExtractor = (function() {
         };
     }
 
+    // 发送进度通知给 popup（通过 runtime 广播）
+    function notifyProgress(isRunning, page, total, count, totalItems, error) {
+        chrome.runtime.sendMessage({
+            action: 'extractionProgress',
+            isRunning: isRunning,
+            currentPage: page,
+            total: total,
+            count: count,
+            totalItems: totalItems,
+            success: !error,
+            error: error
+        }).catch(console.error);
+    }
+
     async function startAutoExtraction() {
         if (isRunning) {
             const error = '正在进行抓取，请稍后再试';
@@ -130,13 +145,12 @@ const TiebaExtractor = (function() {
         isRunning = true;
         allData = [];
         currentPage = 1;
+        totalPagesProcessed = 0;
 
         console.log('[TiebaExtractor] 🚀 开始自动抓取...');
 
-        chrome.runtime.sendMessage({
-            action: 'extractionStarted',
-            totalPages: config.maxPages
-        }).catch(console.error);
+        // 立即通知进度开始
+        notifyProgress(true, 1, config.maxPages, 0, 0);
 
         try {
             const maxPages = config.maxPages;
@@ -164,6 +178,9 @@ const TiebaExtractor = (function() {
                         console.log(`[TiebaExtractor] ⏹️ 第 ${page} 页已无符合截止日期的数据，停止抓取`);
                         await saveDataToStorage();
                         isRunning = false;
+                        
+                        notifyProgress(false, page, maxPages, 0, allData.length);
+                        
                         return { 
                             success: true, 
                             totalCount: allData.length,
@@ -171,6 +188,7 @@ const TiebaExtractor = (function() {
                         };
                     }
                     
+                    totalPagesProcessed = page;
                     console.log(`[TiebaExtractor] 📊 第 ${page} 页符合条件的有 ${filtered.length} 条`);
                     allData = allData.concat(filtered);
                     
@@ -179,6 +197,9 @@ const TiebaExtractor = (function() {
                         count: filtered.length,
                         total: allData.length
                     }).catch(console.error);
+                    
+                    // 通知进度更新
+                    notifyProgress(true, page + 1, maxPages, filtered.length, allData.length);
                 } else {
                     console.log(`[TiebaExtractor] △ 第 ${page} 页没有新数据`);
                 }
@@ -189,10 +210,8 @@ const TiebaExtractor = (function() {
             allData.sort((a, b) => b.date.localeCompare(a.date));
             await saveDataToStorage();
 
-            chrome.runtime.sendMessage({
-                action: 'extractionComplete',
-                totalCount: allData.length
-            }).catch(console.error);
+            // 通知完成
+            notifyProgress(false, totalPagesProcessed + 1, maxPages, 0, allData.length);
 
             isRunning = false;
             console.log(`[TiebaExtractor] 🎉 自动抓取完成！共提取 ${allData.length} 条数据`);
@@ -200,6 +219,10 @@ const TiebaExtractor = (function() {
         } catch (error) {
             console.error('[TiebaExtractor] 抓取失败:', error);
             isRunning = false;
+            
+            // 通知失败
+            notifyProgress(false, totalPagesProcessed + 1, config.maxPages, 0, allData.length, error.message);
+            
             return { success: false, error: error.message };
         }
     }
@@ -611,6 +634,20 @@ const DouyinExtractor = (function() {
         }
     }
     
+    // 发送进度通知给 popup（通过 runtime 广播）
+    function notifyProgress(isRunning, page, total, count, totalItems, error) {
+        chrome.runtime.sendMessage({
+            action: 'extractionProgress',
+            isRunning: isRunning,
+            currentPage: page,
+            total: total,
+            count: count,
+            totalItems: totalItems,
+            success: !error,
+            error: error
+        }).catch(console.error);
+    }
+    
     /**
      * 开始自动抓取
      */
@@ -631,6 +668,9 @@ const DouyinExtractor = (function() {
             action: 'douyinExtractionStarted',
             totalPages: config.maxPages
         }).catch(console.error);
+        
+        // 通知进度开始
+        notifyProgress(true, 1, config.maxPages, 0, 0);
         
         try {
             const maxPages = config.maxPages;
@@ -675,6 +715,9 @@ const DouyinExtractor = (function() {
                         total: allData.length
                     }).catch(console.error);
                     
+                    // 通知进度更新
+                    notifyProgress(true, pageCount + 2, maxPages, newWorks.length, allData.length);
+                    
                     if ((pageCount + 1) % 5 === 0) {
                         await saveDataToStorage();
                     }
@@ -696,6 +739,9 @@ const DouyinExtractor = (function() {
             
             console.log(`[DouyinExtractor] 🎉 自动抓取完成！共提取 ${allData.length} 条数据`);
             
+            // 通知完成
+            notifyProgress(false, pageCount + 1, maxPages, 0, allData.length);
+            
             chrome.runtime.sendMessage({
                 action: 'douyinExtractionComplete',
                 totalCount: allData.length
@@ -705,6 +751,10 @@ const DouyinExtractor = (function() {
         } catch (error) {
             console.error('[DouyinExtractor] 抓取失败:', error);
             isRunning = false;
+            
+            // 通知失败
+            notifyProgress(false, pageCount + 1, config.maxPages, 0, allData.length, error.message);
+            
             return { success: false, error: error.message };
         }
     }
@@ -745,26 +795,45 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     // 检查当前页面类型并分发到对应的提取器
     const currentUrl = window.location.href;
     const isTiebaPage = currentUrl.startsWith('https://tieba.baidu.com/home/creative/work');
-    const isDouyinPage = currentUrl.includes('creator.douyin.com/janus/douyin/creator/pc/work_list');
+    const isDouyinPage = currentUrl.includes('creator.douyin.com/creator-micro/content/manage') ||
+                         currentUrl.includes('creator.douyin.com/janus/douyin/creator/pc/work_list');
     
     switch (message.action) {
         case 'startAutoExtraction':
+            console.log('[ContentScript] startAutoExtraction 请求已收到，正在立即响应...');
             if (isDouyinPage) {
                 const pages = message.pages || 42;
-                const autoResult = DouyinExtractor.startAutoExtraction(pages);
-                autoResult.then(result => {
-                    sendResponse(result);
-                }).catch(err => {
+                try {
+                    // 立即启动异步抓取（不等待完成，进度通过 extractionProgress 消息通知）
+                    DouyinExtractor.startAutoExtraction(pages).catch(err => {
+                        console.error('[ContentScript] 自动抓取失败:', err);
+                    });
+                    // 立即响应 popup，告知已成功启动
+                    sendResponse({ success: true, message: '自动抓取已启动' });
+                } catch (err) {
+                    console.error('[ContentScript] 启动自动抓取失败:', err);
                     sendResponse({ success: false, error: err.message });
-                });
+                }
                 return true;
             } else if (isTiebaPage) {
-                const pages = message.pages || 42;
-                const autoResult = TiebaExtractor.startAutoExtraction(pages);
-                autoResult.then(result => {
-                    sendResponse(result);
-                }).catch(err => {
+                try {
+                    const pages = message.pages || 42;
+                    // 立即启动异步抓取（不等待完成，进度通过 extractionProgress 消息通知）
+                    TiebaExtractor.startAutoExtraction(pages).catch(err => {
+                        console.error('[ContentScript] 自动抓取失败:', err);
+                    });
+                    // 立即响应 popup，告知已成功启动
+                    sendResponse({ success: true, message: '自动抓取已启动' });
+                } catch (err) {
+                    console.error('[ContentScript] 启动自动抓取失败:', err);
                     sendResponse({ success: false, error: err.message });
+                }
+                return true;
+            } else {
+                console.warn('[ContentScript] startAutoExtraction: 不在支持的页面上');
+                sendResponse({ 
+                    success: false, 
+                    error: '当前页面不支持自动抓取，请在抖音创作者服务中心或百度贴吧创作页面使用'
                 });
                 return true;
             }
@@ -778,7 +847,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
                 const stopResult = TiebaExtractor.stopExtraction();
                 sendResponse(stopResult);
             }
-            break;
+            return true;
             
         case 'exportToCSV':
             if (isDouyinPage) {
@@ -796,7 +865,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
                 });
                 return true;
             }
-            break;
+            return true;
             
         case 'extractNow':
             if (isDouyinPage) {
@@ -814,7 +883,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
                 });
                 return true;
             }
-            break;
+            return true;
             
         case 'clearData':
             if (isDouyinPage) {
@@ -824,11 +893,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
                 const clearResult = TiebaExtractor.clearData();
                 sendResponse(clearResult);
             }
-            break;
+            return true;
             
         default:
             console.warn('[ContentScript] Unknown action:', message.action);
             sendResponse({ success: false, error: 'Unknown action' });
+            return true;
     }
 });
 

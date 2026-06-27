@@ -2,6 +2,58 @@
 // 视频数据提取器 - Popup Script（支持贴吧和抖音）
 // ============================================
 
+// 监听来自 background/content-script 的消息
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+    console.log('[Popup] Received message:', message);
+    
+    if (message.action === 'extractionProgress') {
+        const currentPageEl = document.getElementById('currentPage');
+        const totalCountEl = document.getElementById('totalCount');
+        const extractionStatusEl = document.getElementById('extractionStatus');
+        const startAutoBtn = document.getElementById('startAutoBtn');
+        const exportCsvBtn = document.getElementById('exportCsvBtn');
+        const messageBox = document.getElementById('messageBox');
+        
+        // 更新 UI 状态
+        if (currentPageEl) currentPageEl.textContent = message.currentPage || '--';
+        if (totalCountEl) totalCountEl.textContent = message.totalItems || message.total || '0';
+        
+        if (extractionStatusEl) {
+            extractionStatusEl.textContent = message.isRunning ? '抓取中...' : '空闲';
+            extractionStatusEl.className = `status-badge ${message.isRunning ? 'running' : 'idle'}`;
+        }
+        
+        if (startAutoBtn) startAutoBtn.disabled = message.isRunning;
+        if (exportCsvBtn) exportCsvBtn.disabled = message.isRunning;
+        
+        // 显示消息
+        if (messageBox) {
+            if (!message.isRunning && message.success) {
+                messageBox.textContent = `✅ 抓取完成！共提取 ${message.totalItems || 0} 条数据`;
+                messageBox.className = 'message-box success';
+                setTimeout(() => {
+                    if (messageBox) {
+                        messageBox.textContent = '';
+                        messageBox.className = 'message-box';
+                    }
+                }, 3000);
+            } else if (!message.isRunning && !message.success) {
+                messageBox.textContent = '❌ ' + (message.error || '抓取失败');
+                messageBox.className = 'message-box error';
+                setTimeout(() => {
+                    if (messageBox) {
+                        messageBox.textContent = '';
+                        messageBox.className = 'message-box';
+                    }
+                }, 3000);
+            }
+        }
+    }
+    
+    sendResponse({ success: true });
+    return true;
+});
+
 document.addEventListener('DOMContentLoaded', async () => {
     // DOM 元素引用
     const currentPageEl = document.getElementById('currentPage');
@@ -21,18 +73,21 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     // 显示消息
     function showMessage(message, type = 'info') {
+        if (!messageBox) return;
         messageBox.textContent = message;
         messageBox.className = `message-box ${type}`;
         
         setTimeout(() => {
-            messageBox.textContent = '';
-            messageBox.className = 'message-box';
+            if (messageBox) {
+                messageBox.textContent = '';
+                messageBox.className = 'message-box';
+            }
         }, 3000);
     }
     
     // 检查是否是抖音页面
     function isDouyinPage() {
-        return window.location.href.includes('creator.douyin.com/janus/douyin/creator/pc/work_list');
+        return window.location.href.includes('creator.douyin.com/creator-micro/content/manage');
     }
     
     // 检查是否是贴吧页面
@@ -49,50 +104,54 @@ document.addEventListener('DOMContentLoaded', async () => {
     // 发送消息到 content script
     function sendMessageToContent(action, data = {}) {
         return new Promise((resolve, reject) => {
-            chrome.tabs.query({ active: true, currentWindow: true }, async (tabs) => {
+            chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
                 if (!tabs || tabs.length === 0) {
                     reject(new Error('No active tab found'));
                     return;
                 }
                 
                 const tab = tabs[0];
-                
-                try {
-                    chrome.tabs.sendMessage(tab.id, { action, ...data }, (response) => {
-                        if (chrome.runtime.lastError) {
-                            reject(new Error(chrome.runtime.lastError.message));
-                        } else {
-                            resolve(response);
-                        }
-                    });
-                } catch (error) {
-                    reject(error);
+                if (!tab.id) {
+                    reject(new Error('Tab has no ID'));
+                    return;
                 }
+                
+                // 使用带回调的 sendMessage
+                chrome.tabs.sendMessage(tab.id, { action, ...data }, (response) => {
+                    // 检查是否有运行时错误（如没有 listener）
+                    if (chrome.runtime.lastError) {
+                        const errorMsg = chrome.runtime.lastError.message;
+                        console.error('[Popup] Message error:', errorMsg);
+                        reject(new Error(errorMsg));
+                    } else if (response && response.success !== undefined) {
+                        // 成功收到响应
+                        resolve(response);
+                    } else {
+                        // 收到了响应但没有 success 字段
+                        resolve(response || { success: true });
+                    }
+                });
+                
+                // 设置超时处理
+                setTimeout(() => {
+                    reject(new Error('Request timeout'));
+                }, 10000);
             });
         });
     }
     
     // 更新 UI 状态
     function updateUI(isRunning, currentPage, total) {
-        currentPageEl.textContent = currentPage || '--';
-        totalCountEl.textContent = total || '0';
+        if (currentPageEl) currentPageEl.textContent = currentPage || '--';
+        if (totalCountEl) totalCountEl.textContent = total || '0';
         
-        if (isRunning) {
-            extractionStatusEl.textContent = '抓取中...';
-            extractionStatusEl.className = 'status-badge running';
-            startAutoBtn.disabled = true;
-            exportCsvBtn.disabled = true;
-        } else {
-            extractionStatusEl.textContent = '空闲';
-            extractionStatusEl.className = 'status-badge idle';
-            startAutoBtn.disabled = false;
-            
-            if (total > 0) {
-                exportCsvBtn.disabled = false;
-            } else {
-                exportCsvBtn.disabled = true;
-            }
+        if (extractionStatusEl) {
+            extractionStatusEl.textContent = isRunning ? '抓取中...' : '空闲';
+            extractionStatusEl.className = `status-badge ${isRunning ? 'running' : 'idle'}`;
         }
+        
+        if (startAutoBtn) startAutoBtn.disabled = isRunning;
+        if (exportCsvBtn) exportCsvBtn.disabled = isRunning || (total <= 0);
     }
     
     // 初始化页面标题和检查是否在正确的页面
@@ -107,10 +166,10 @@ document.addEventListener('DOMContentLoaded', async () => {
                 pageTitle.textContent = '📊 抖音视频数据提取器';
             }
             
-            if (!url.includes('janus/douyin/creator/pc/work_list')) {
+            if (!url.includes('creator.douyin.com/creator-micro/content/manage')) {
                 showMessage('❌ 请在抖音创作者服务中心工作列表页面使用此功能', 'error');
-                startAutoBtn.style.display = 'none';
-                exportCsvBtn.style.display = 'none';
+                if (startAutoBtn) startAutoBtn.style.display = 'none';
+                if (exportCsvBtn) exportCsvBtn.style.display = 'none';
                 return;
             }
         } else if (url.startsWith('https://tieba.baidu.com/home/creative/work')) {
@@ -121,18 +180,18 @@ document.addEventListener('DOMContentLoaded', async () => {
         } else {
             // 不在任何支持的页面
             showMessage(`⚠️ 请打开抖音创作者服务平台或百度贴吧创作页面`, 'warning');
-            startAutoBtn.style.display = 'none';
-            exportCsvBtn.style.display = 'none';
+            if (startAutoBtn) startAutoBtn.style.display = 'none';
+            if (exportCsvBtn) exportCsvBtn.style.display = 'none';
             return;
         }
         
         // 更新按钮文本
         if (currentPlatform === 'douyin') {
-            startAutoBtn.innerHTML = '🚀 开始自动抓取<br><small>(抖音视频数据)</small>';
-            exportCsvBtn.innerHTML = '📁 导出抖音视频 CSV';
+            if (startAutoBtn) startAutoBtn.innerHTML = '🚀 开始自动抓取<br><small>(抖音视频数据)</small>';
+            if (exportCsvBtn) exportCsvBtn.innerHTML = '📁 导出抖音视频 CSV';
         } else {
-            startAutoBtn.innerHTML = '🚀 开始自动抓取<br><small>(百度贴吧数据)</small>';
-            exportCsvBtn.innerHTML = '📁 导出贴吧数据 CSV';
+            if (startAutoBtn) startAutoBtn.innerHTML = '🚀 开始自动抓取<br><small>(百度贴吧数据)</small>';
+            if (exportCsvBtn) exportCsvBtn.innerHTML = '📁 导出贴吧数据 CSV';
         }
         
         // 更新 UI 状态
@@ -224,20 +283,43 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
     
     // 绑定事件
-    startAutoBtn.addEventListener('click', startAutoExtraction);
-    exportCsvBtn.addEventListener('click', exportCSV);
-    clearDataBtn.addEventListener('click', clearData);
+    if (startAutoBtn) startAutoBtn.addEventListener('click', startAutoExtraction);
+    if (exportCsvBtn) exportCsvBtn.addEventListener('click', exportCSV);
+    if (clearDataBtn) clearDataBtn.addEventListener('click', clearData);
     
-    // 监听背景页面的数据更新
-    chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-        if (message.action === 'updateDouyinData' && currentPlatform === 'douyin') {
-            updateUI(false, 0, message.total);
-        } else if (message.action === 'updateExtractedData' && currentPlatform === 'tieba') {
-            updateUI(false, 0, message.total);
+    // 从 storage 恢复提取状态
+    async function restoreExtractionState() {
+        try {
+            const result = await new Promise((resolve) => {
+                chrome.storage.local.get(['extractionState'], (result) => {
+                    resolve(result);
+                });
+            });
+            
+            if (result.extractionState && result.extractionState.isRunning) {
+                const state = result.extractionState;
+                updateUI(true, state.currentPage, state.totalItems);
+                showMessage(`⏳ 检测到正在进行的抓取任务 (${state.platform})`, 'info');
+                
+                // 如果10分钟后状态未更新，自动清除
+                if (state.lastUpdate) {
+                    const lastUpdate = new Date(state.lastUpdate);
+                    const now = new Date();
+                    const diffMinutes = (now - lastUpdate) / 60000;
+                    
+                    if (diffMinutes > 10) {
+                        // 清除过期的状态
+                        chrome.storage.local.remove(['extractionState']);
+                        updateUI(false, 0, 0);
+                    }
+                }
+            }
+        } catch (error) {
+            console.error('[Popup] 恢复状态失败:', error);
         }
-        sendResponse({ success: true });
-    });
+    }
     
     // 初始化
+    restoreExtractionState();
     init();
 });

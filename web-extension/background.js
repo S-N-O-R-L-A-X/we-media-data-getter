@@ -4,56 +4,83 @@
 
 console.log('[Extractor] Background service worker started');
 
+// 当前提取状态
+let currentExtractionState = {
+    isRunning: false,
+    platform: '',
+    currentPage: 0,
+    totalPages: 0,
+    totalItems: 0,
+    lastUpdate: null,
+    error: null
+};
+
+// 保存状态到 storage，以便 popup 重新打开时恢复
+function saveStateToStorage(state) {
+    chrome.storage.local.set({
+        extractionState: state
+    }).catch(console.error);
+}
+
 // Manifest V3 需要返回 true 以支持异步响应
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     console.log('[Extractor] Received message:', message);
 
     switch (message.action) {
+        case 'extractionProgress':
+            // 提取进度更新 - 保存状态到 storage 供 popup 打开时恢复
+            currentExtractionState = {
+                isRunning: message.isRunning,
+                platform: message.platform || 'unknown',
+                currentPage: message.currentPage || 0,
+                totalPages: message.total || 0,
+                totalItems: message.totalItems || 0,
+                lastUpdate: new Date().toISOString(),
+                error: message.error || null
+            };
+            saveStateToStorage(currentExtractionState);
+            
+            console.log(`[Extractor] 进度更新: isRunning=${message.isRunning}, page=${message.currentPage}, total=${message.totalItems}`);
+            sendResponse({ success: true });
+            return true;
+
         case 'showNotification':
-            // 使用 chrome.action.setBadgeText 显示通知
             console.log('[Extractor] Notification:', message.message);
             sendResponse({ success: true });
             return true;
 
         case 'updateExtractedData':
-            // 更新贴吧提取数据统计
             updateExtractionStats('tieba', message.count, message.total);
             sendResponse({ success: true });
-            break;
+            return true;
 
         case 'updateDouyinData':
-            // 更新抖音提取数据统计
             updateExtractionStats('douyin', message.count, message.total);
             sendResponse({ success: true });
-            break;
+            return true;
 
         case 'extractionStarted':
-            // 记录贴吧抓取开始
             recordExtractionStart('tieba', message.totalPages);
             sendResponse({ success: true });
-            break;
+            return true;
 
         case 'douyinExtractionStarted':
-            // 记录抖音抓取开始
             recordExtractionStart('douyin', message.totalPages);
             sendResponse({ success: true });
-            break;
+            return true;
 
         case 'extractionComplete':
-            // 记录贴吧抓取完成
             recordExtractionComplete('tieba', message.totalCount);
             sendResponse({ success: true });
-            break;
+            return true;
 
         case 'douyinExtractionComplete':
-            // 记录抖音抓取完成
             recordExtractionComplete('douyin', message.totalCount);
             sendResponse({ success: true });
-            break;
+            return true;
 
         case 'clearData':
-            // 清空数据
-            chrome.storage.local.remove(['tiebaData_batch', 'douyinData_batch'])
+            chrome.storage.local.remove(['tiebaData_batch', 'douyinData_batch', 'extractionState'])
                 .then(() => sendResponse({ success: true }))
                 .catch(err => sendResponse({ success: false, error: err.message }));
             return true;
@@ -61,6 +88,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         default:
             console.warn('[Extractor] Unknown action:', message.action);
             sendResponse({ success: false, error: 'Unknown action' });
+            return true;
     }
 });
 
@@ -122,7 +150,7 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
         
         // 检查是否是贴吧或抖音页面
         if (url.startsWith('https://tieba.baidu.com/home/creative/work') || 
-            url.includes('creator.douyin.com/janus/douyin/creator/pc/work_list')) {
+            url.includes('creator.douyin.com/creator-micro/content/manage')) {
             console.log('[Extractor] Tab updated, url:', url);
             
             // 注入 content script
