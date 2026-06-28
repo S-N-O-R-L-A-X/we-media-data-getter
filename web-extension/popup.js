@@ -101,43 +101,63 @@ document.addEventListener('DOMContentLoaded', async () => {
         return tab;
     }
     
-    // 发送消息到 content script
-    function sendMessageToContent(action, data = {}) {
+    // 注入 content script 到当前标签页
+    async function injectContentScript(tabId) {
         return new Promise((resolve, reject) => {
-            chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-                if (!tabs || tabs.length === 0) {
-                    reject(new Error('No active tab found'));
-                    return;
+            chrome.scripting.executeScript({
+                target: { tabId },
+                files: ['content-script.js']
+            }, () => {
+                if (chrome.runtime.lastError) {
+                    reject(new Error(chrome.runtime.lastError.message));
+                } else {
+                    resolve();
                 }
-                
-                const tab = tabs[0];
-                if (!tab.id) {
-                    reject(new Error('Tab has no ID'));
-                    return;
-                }
-                
-                // 使用带回调的 sendMessage
-                chrome.tabs.sendMessage(tab.id, { action, ...data }, (response) => {
-                    // 检查是否有运行时错误（如没有 listener）
-                    if (chrome.runtime.lastError) {
-                        const errorMsg = chrome.runtime.lastError.message;
-                        console.error('[Popup] Message error:', errorMsg);
-                        reject(new Error(errorMsg));
-                    } else if (response && response.success !== undefined) {
-                        // 成功收到响应
-                        resolve(response);
-                    } else {
-                        // 收到了响应但没有 success 字段
-                        resolve(response || { success: true });
-                    }
-                });
-                
-                // 设置超时处理
-                setTimeout(() => {
-                    reject(new Error('Request timeout'));
-                }, 10000);
             });
         });
+    }
+
+    // 发送消息到 content script（带注入回退）
+    async function sendMessageToContent(action, data = {}) {
+        const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+        if (!tabs || tabs.length === 0) {
+            throw new Error('No active tab found');
+        }
+        
+        const tab = tabs[0];
+        if (!tab.id) {
+            throw new Error('Tab has no ID');
+        }
+        
+        // 尝试发送消息，如果失败则注入 content script 后重试一次
+        for (let attempt = 0; attempt < 2; attempt++) {
+            try {
+                const response = await new Promise((resolve, reject) => {
+                    chrome.tabs.sendMessage(tab.id, { action, ...data }, (response) => {
+                        if (chrome.runtime.lastError) {
+                            reject(new Error(chrome.runtime.lastError.message));
+                        } else {
+                            resolve(response || { success: true });
+                        }
+                    });
+                    
+                    // 设置超时
+                    setTimeout(() => reject(new Error('Request timeout')), 10000);
+                });
+                return response; // 成功则返回
+            } catch (error) {
+                const msg = error.message || '';
+                // 如果是因为 content script 不存在，注入后重试一次
+                if (attempt === 0 && msg.includes('Receiving end does not exist')) {
+                    console.log('[Popup] Content script not found, injecting...');
+                    await injectContentScript(tab.id);
+                    // 等待 content script 初始化
+                    await new Promise(r => setTimeout(r, 500));
+                    continue; // 重试
+                }
+                throw error; // 其他错误直接抛出
+            }
+        }
     }
     
     // 更新 UI 状态

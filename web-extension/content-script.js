@@ -2,6 +2,12 @@
 // 百度贴吧 & 抖音视频数据提取器 - Content Script
 // ============================================
 
+// 防止重复注入
+if (window.__extractorLoaded) {
+    console.warn('[ContentScript] 跳过重复注入');
+} else {
+    window.__extractorLoaded = true;
+
 // ============================================
 // 百度贴吧视频数据提取器
 // ============================================
@@ -325,9 +331,10 @@ const DouyinExtractor = (function() {
     'use strict';
     
     const config = {
-        apiUrl: 'https://creator.douyin.com/creator-micro-service/clue/task/get_own_task_list_v2',
+        // 用户提供的正确 API 端点
+        apiUrl: 'https://creator.douyin.com/janus/douyin/creator/pc/work_list',
         maxPages: 50,
-        pageSize: 30
+        pageSize: 12
     };
     
     let allData = [];
@@ -335,49 +342,282 @@ const DouyinExtractor = (function() {
     let isRunning = false;
     
     /**
+     * 解析播放量文本（如"1.2 万”、"10 万+"等）
+     */
+    function parsePlayCount(text) {
+        if (!text) return 0;
+        text = text.replace(/\s+/g, '');
+        const match = text.match(/^([\d.]+)([万千+]?)$/);
+        
+        if (!match) {
+            const numMatch = text.match(/^([\d.]+)/);
+            if (numMatch) {
+                return parseFloat(numMatch[1]) || 0;
+            }
+            return 0;
+        }
+        
+        const num = parseFloat(match[1]);
+        const unit = match[2];
+        
+        switch (unit) {
+            case '万': return num * 10000;
+            case '千': return num * 1000;
+            case '+': return Math.floor(num * 10000);
+            default: return num;
+        }
+    }
+    
+    /**
+     * 时间戳转日期字符串
+     */
+    function timestampToDateStr(timestamp) {
+        if (!timestamp) return '';
+        try {
+            const date = new Date(timestamp * 1000);
+            const year = date.getFullYear();
+            const month = String(date.getMonth() + 1).padStart(2, '0');
+            const day = String(date.getDate()).padStart(2, '0');
+            const hours = String(date.getHours()).padStart(2, '0');
+            const minutes = String(date.getMinutes()).padStart(2, '0');
+            return `${year}-${month}-${day} ${hours}:${minutes}`;
+        } catch (e) {
+            console.error('[DouyinExtractor] 时间戳转换失败:', e);
+            return '';
+        }
+    }
+    
+    /**
+     * 从 aweme_list（详细数据）提取作品信息
+     */
+    function extractFromAwemeList(awemeList) {
+        return awemeList.map(item => {
+            const statistics = item.statistics || {};
+            const author = item.author || {};
+            const video = item.video || {};
+            
+            return {
+                title: item.caption || item.desc || item.item_title || '',
+                // 将播放/收藏数等转换为数字
+                playCount: parseInt(statistics.play_count, 10) || 0,
+                likeCount: parseInt(statistics.digg_count, 10) || 0,
+                commentCount: parseInt(statistics.comment_count, 10) || 0,
+                collectCount: parseInt(statistics.collect_count, 10) || 0,
+                shareCount: parseInt(statistics.forward_count, 10) || 0,
+                url: `https://www.douyin.com/video/${item.aweme_id}`,
+                videoId: item.aweme_id,
+                authorName: author.nickname || '',
+                authorId: author.uid || '',
+                // 时长（毫秒），转为秒
+                duration: item.duration ? Math.round(item.duration / 1000) : 0,
+                // 封面图
+                coverUrl: (video.cover && video.cover.url_list && video.cover.url_list.length > 0)
+                    ? video.cover.url_list[0] : '',
+                publishTime: timestampToDateStr(item.create_time),
+                createTimestamp: item.create_time || 0,
+                // 审核状态：true=已审核, false=未审核
+                reviewed: !!(item.status && item.status.reviewed),
+                // 合集信息
+                mixName: (item.mix_info && item.mix_info.mix_name) || '',
+                // 置顶状态
+                isPinned: !!item.is_pinned,
+                // 来源类型
+                itemType: item.aweme_type || 0,
+                raw: item
+            };
+        });
+    }
+    
+    /**
+     * 从 items（简要数据 + metrics）提取作品信息
+     */
+    function extractFromItems(items) {
+        return items.map(item => {
+            const metrics = item.metrics || {};
+            const cover = item.cover || {};
+            
+            return {
+                title: item.description || item.item_title || '',
+                playCount: parseInt(metrics.view_count, 10) || 0,
+                likeCount: parseInt(metrics.like_count, 10) || 0,
+                commentCount: parseInt(metrics.comment_count, 10) || 0,
+                collectCount: parseInt(metrics.favorite_count, 10) || 0,
+                shareCount: parseInt(metrics.share_count, 10) || 0,
+                url: `https://www.douyin.com/video/${item.id}`,
+                videoId: item.id,
+                authorName: '',  // items 可能不包含作者信息
+                authorId: '',
+                duration: 0,
+                coverUrl: (cover.uri && cover.url_list && cover.url_list.length > 0)
+                    ? cover.url_list[0] : '',
+                publishTime: timestampToDateStr(item.create_time),
+                createTimestamp: item.create_time || 0,
+                reviewed: !!(item.review && item.review.status === 2),
+                mixName: '',
+                isPinned: false,
+                itemType: item.type || 0,
+                raw: item
+            };
+        });
+    }
+    
+    /**
      * 从抖音创作者平台 API 获取作品列表
+     * 适配实际返回的 aweme_list / items 结构
      */
     async function fetchWorkList(cursor = 0, count = 30) {
         console.log(`[DouyinExtractor] 正在从 API 获取作品列表，cursor=${cursor}, count=${count}`);
         
         try {
-            const url = new URL('https://creator.douyin.com/creator-micro-service/clue/task/get_own_task_list_v2');
+            // 使用用户提供的 API 端点
+            const url = new URL(config.apiUrl);
             url.searchParams.set('status', '0');
             url.searchParams.set('count', count.toString());
             url.searchParams.set('max_cursor', cursor.toString());
+            // 移除 min_cursor（API 不需要）
             url.searchParams.set('scene', 'star_atlas');
+            // device_platform 设置为 web 以适应 PC 浏览器
             url.searchParams.set('device_platform', 'web');
             url.searchParams.set('aid', '1128');
             url.searchParams.set('channel', 'channel_pc_web');
+            // work_type 表示视频内容类型
             url.searchParams.set('work_type', '9');
             
+            // 打印调试信息
+            console.log('[DouyinExtractor] 正在发起 API 请求:', url.toString());
+            
             const response = await fetch(url.toString(), {
+                method: 'GET',
                 headers: {
                     'Content-Type': 'application/json',
-                    'X-Requested-With': 'XMLHttpRequest'
-                }
+                    'X-Requested-With': 'XMLHttpRequest',
+                    'User-Agent': navigator.userAgent
+                },
+                credentials: 'include'  // 关键：包含 Cookie 进行身份验证
             });
             
+            console.log('[DouyinExtractor] API 响应状态:', response.status, response.statusText);
+            
+            // 尝试读取响应文本以便调试
+            let responseText;
+            try {
+                responseText = await response.clone().text();
+            } catch (e) {
+                responseText = '[无法读取响应体]';
+            }
+            console.log('[DouyinExtractor] API 响应文本长度:', responseText?.length || 0);
+            
             if (!response.ok) {
-                throw new Error(`HTTP error! status: ${response.status}`);
+                const errorText = responseText ? responseText.substring(0, 300) : '无法读取错误信息';
+                console.error('[DouyinExtractor] API 请求失败:', response.status, errorText);
+                throw new Error(`HTTP error! status: ${response.status}, text: ${errorText}`);
             }
             
-            const result = await response.json();
+            let result;
+            try {
+                result = await response.json();
+            } catch (e) {
+                console.error('[DouyinExtractor] JSON 解析失败，响应不是有效的 JSON:', e);
+                console.error('[DouyinExtractor] 原始响应前 500 字符:', responseText.substring(0, 500));
+                return { tasks: [], has_more: false, cursor: 0, total: 0, error: 'API 响应不是有效的 JSON，可能是 HTML 页面（请检查是否已登录抖音创作者平台）' };
+            }
             
+            // 打印完整的 API 响应以便调试 - 无论如何都执行
+            console.group('[DouyinExtractor] API 原始响应');
+            console.log('所有键名:', Object.keys(result));
+            console.log('status_code:', result.status_code);
+            console.log('total:', result.total);
+            console.log('has_more:', result.has_more);
+            console.log('cursor:', result.max_cursor || result.cursor);
+            if (result.aweme_list && Array.isArray(result.aweme_list)) {
+                console.log('⚠️ aweme_list 存在！长度:', result.aweme_list.length);
+            }
+            if (result.items && Array.isArray(result.items)) {
+                console.log('⚠️ items 存在！长度:', result.items.length);
+            }
+            if (result.data && result.data.task_list && Array.isArray(result.data.task_list)) {
+                console.log('⚠️ data.task_list 存在！长度:', result.data.task_list.length);
+            }
+            // 打印前几个数据项的结构示例
+            if (result.aweme_list && result.aweme_list.length > 0) {
+                console.log('示例数据 (第一个 aweme):', JSON.stringify(result.aweme_list[0], null, 2).substring(0, 800));
+            } else if (result.items && result.items.length > 0) {
+                console.log('示例数据 (第一个 item):', JSON.stringify(result.items[0], null, 2).substring(0, 800));
+            } else if (result.data && result.data.task_list && result.data.task_list.length > 0) {
+                console.log('示例数据 (第一个 task):', JSON.stringify(result.data.task_list[0], null, 2).substring(0, 800));
+            }
+            console.groupEnd();
+            
+            // 检查 status_code
+            if (result.status_code !== undefined && result.status_code !== 0) {
+                console.error('[DouyinExtractor] API 返回错误状态码:', result.status_code);
+                console.error('[DouyinExtractor] 错误信息:', result.message || result.msg || '无');
+                return { tasks: [], has_more: false, cursor: 0, total: 0, error: `status_code: ${result.status_code}` };
+            }
+            
+            // 优先使用 aweme_list（最详细的数据）
+            if (result.aweme_list && Array.isArray(result.aweme_list) && result.aweme_list.length > 0) {
+                const tasks = extractFromAwemeList(result.aweme_list);
+                console.log(`[DouyinExtractor] ✅ aweme_list 返回了 ${tasks.length} 条详细作品数据`);
+                
+                return {
+                    tasks: tasks,
+                    has_more: result.has_more || false,
+                    cursor: result.max_cursor || 0,
+                    total: result.total || tasks.length
+                };
+            }
+            
+            // 备选：使用 items（带 metrics 的简要数据）
+            if (result.items && result.items.length > 0) {
+                const tasks = extractFromItems(result.items);
+                console.log(`[DouyinExtractor] ✅ items 返回了 ${tasks.length} 条作品数据（含 metrics）`);
+                
+                return {
+                    tasks: tasks,
+                    has_more: result.has_more || false,
+                    cursor: result.max_cursor || 0,
+                    total: result.total || tasks.length
+                };
+            }
+            
+            // 兼容旧格式：result.data.task_list
             if (result.data && result.data.task_list) {
-                const tasks = result.data.task_list;
-                console.log(`[DouyinExtractor] ✅ API 返回了 ${tasks.length} 条作品数据`);
+                const tasks = result.data.task_list.map(task => ({
+                    title: task.video?.title || task.title || '',
+                    playCount: parseInt(task.video_stats?.total_play_count, 10) || 0,
+                    likeCount: parseInt(task.video_stats?.digg_count, 10) || 0,
+                    commentCount: parseInt(task.video_stats?.comment_count, 10) || 0,
+                    collectCount: 0,
+                    shareCount: parseInt(task.video_stats?.share_count, 10) || 0,
+                    url: `https://www.douyin.com/video/${task.aweme_id}`,
+                    videoId: task.aweme_id,
+                    authorName: '',
+                    authorId: '',
+                    duration: 0,
+                    coverUrl: '',
+                    publishTime: timestampToDateStr(task.publish_time),
+                    createTimestamp: task.publish_time || 0,
+                    reviewed: false,
+                    mixName: '',
+                    isPinned: false,
+                    itemType: 0,
+                    raw: task
+                }));
+                
+                console.log(`[DouyinExtractor] ✅ task_list 格式返回了 ${tasks.length} 条作品数据`);
                 
                 return {
                     tasks: tasks,
                     has_more: result.data.has_more || false,
                     cursor: result.data.max_cursor || 0,
-                    total: result.data.total || 0
+                    total: result.data.total || tasks.length
                 };
-            } else {
-                console.warn('[DouyinExtractor] API 返回数据格式异常:', result);
-                return { tasks: [], has_more: false, cursor: 0, total: 0 };
             }
+            
+            console.warn('[DouyinExtractor] API 返回数据格式异常，可用的键:', Object.keys(result));
+            console.warn('[DouyinExtractor] result 内容预览:', JSON.stringify(result, null, 2).substring(0, 500));
+            return { tasks: [], has_more: false, cursor: 0, total: 0 };
         } catch (error) {
             console.error('[DouyinExtractor] API 请求错误:', error);
             return { tasks: [], has_more: false, cursor: 0, total: 0, error: error.message };
@@ -555,17 +795,8 @@ const DouyinExtractor = (function() {
             const result = await fetchWorkList(0, 30);
             
             if (result.tasks && result.tasks.length > 0) {
-                const extractedData = result.tasks.map(task => ({
-                    title: task.video?.title || task.title || '未命名作品',
-                    playCount: task.video_stats?.total_play_count || 0,
-                    likeCount: task.video_stats?.digg_count || 0,
-                    commentCount: task.video_stats?.comment_count || 0,
-                    shareCount: task.video_stats?.share_count || 0,
-                    url: `https://www.douyin.com/video/${task.aweme_id}`,
-                    publishTime: task.publish_time || '',
-                    videoId: task.aweme_id,
-                    raw: task
-                }));
+                // result.tasks 已由 fetchWorkList 统一格式化为标准化字段
+                const extractedData = result.tasks;
                 
                 // 去重
                 const existingUrls = new Set(allData.map(item => item.url));
@@ -676,35 +907,48 @@ const DouyinExtractor = (function() {
             const maxPages = config.maxPages;
             let cursor = 0;
             let pageCount = 0;
+            let emptyPageCount = 0;  // 记录连续无新数据的页数
+            const maxEmptyPages = 3;  // 连续 3 页无新数据则停止
             
             while (pageCount < maxPages && isRunning) {
                 console.log(`\n[DouyinExtractor] === 正在获取第 ${pageCount + 1} 页数据 (cursor: ${cursor}) ===`);
                 
+                // 在每次 API 调用前检查 isRunning 状态
+                if (!isRunning) {
+                    console.log('[DouyinExtractor] 抓取已被停止');
+                    break;
+                }
+                
                 const result = await fetchWorkList(cursor, config.pageSize);
+                
+                // API 调用后再次检查 isRunning 状态
+                if (!isRunning) {
+                    console.log('[DouyinExtractor] 抓取已被停止');
+                    break;
+                }
                 
                 if (result.error || !result.tasks || result.tasks.length === 0) {
                     if (result.error) {
                         console.error('[DouyinExtractor]', result.error);
                     }
-                    break;
+                    console.log('[DouyinExtractor] ⏹ API 返回错误或空数据，停止抓取');
+                    emptyPageCount++;
+                    if (emptyPageCount >= maxEmptyPages) {
+                        break;
+                    }
+                    pageCount++;
+                    continue;
                 }
                 
-                const extractedData = result.tasks.map(task => ({
-                    title: task.video?.title || task.title || '未命名作品',
-                    playCount: task.video_stats?.total_play_count || 0,
-                    likeCount: task.video_stats?.digg_count || 0,
-                    commentCount: task.video_stats?.comment_count || 0,
-                    shareCount: task.video_stats?.share_count || 0,
-                    url: `https://www.douyin.com/video/${task.aweme_id}`,
-                    publishTime: task.publish_time || '',
-                    videoId: task.aweme_id,
-                    raw: task
-                }));
+                // result.tasks 已由 fetchWorkList 统一格式化为标准化字段，直接使用
+                const extractedData = result.tasks;
                 
                 const existingUrls = new Set(allData.map(item => item.url));
                 const newWorks = extractedData.filter(work => !existingUrls.has(work.url));
                 
                 if (newWorks.length > 0) {
+                    emptyPageCount = 0;  // 有新数据时重置空页数计数器
+                    
                     allData = allData.concat(newWorks);
                     
                     console.log(`[DouyinExtractor] 📊 第 ${pageCount + 1} 页：新增 ${newWorks.length} 条数据，累计 ${allData.length} 条`);
@@ -723,12 +967,18 @@ const DouyinExtractor = (function() {
                     }
                 } else {
                     console.log(`[DouyinExtractor] △ 第 ${pageCount + 1} 页没有新数据`);
+                    emptyPageCount++;
+                    if (emptyPageCount >= maxEmptyPages) {
+                        console.log('[DouyinExtractor] ⏹ 连续', emptyPageCount, '页无新数据，停止抓取');
+                        break;
+                    }
                 }
                 
                 cursor = result.cursor || (cursor + config.pageSize);
                 pageCount++;
                 
-                if (isRunning) {
+                // 只有在运行时且未达到最大页数时才等待
+                if (isRunning && pageCount < maxPages) {
                     await new Promise(resolve => setTimeout(resolve, 1000));
                 }
             }
@@ -794,9 +1044,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     
     // 检查当前页面类型并分发到对应的提取器
     const currentUrl = window.location.href;
+    
+    // 抖音创作者服务平台工作列表页面
+    const isDouyinPage = currentUrl.includes('creator.douyin.com/creator-micro/content/manage');
+    
+    // 百度贴吧创作页面
     const isTiebaPage = currentUrl.startsWith('https://tieba.baidu.com/home/creative/work');
-    const isDouyinPage = currentUrl.includes('creator.douyin.com/creator-micro/content/manage') ||
-                         currentUrl.includes('creator.douyin.com/janus/douyin/creator/pc/work_list');
+    
+    console.log('[ContentScript] 当前 URL:', currentUrl);
+    console.log('[ContentScript] isDouyinPage:', isDouyinPage, 'isTiebaPage:', isTiebaPage);
     
     switch (message.action) {
         case 'startAutoExtraction':
@@ -907,3 +1163,4 @@ window.tiebaExtractor = TiebaExtractor;
 window.douyinExtractor = DouyinExtractor;
 
 console.log('[ContentScript] === 百度贴吧 & 抖音视频数据提取器已加载 ===');
+}

@@ -13,6 +13,16 @@
     "https://tieba.baidu.com/*",
     "https://creator.douyin.com/*"
   ],
+  "content_scripts": [
+    {
+      "matches": [
+        "https://tieba.baidu.com/home/creative/work*",
+        "https://creator.douyin.com/creator-micro/content/manage*"
+      ],
+      "js": ["content-script.js"],
+      "run_at": "document_end"
+    }
+  ],
   "background": {
     "service_worker": "background.js"
   },
