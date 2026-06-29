@@ -4,7 +4,7 @@
 
 // 防止重复注入
 if (window.__extractorLoaded) {
-    console.warn('[ContentScript] 跳过重复注入');
+    console.log('[ContentScript] 跳过重复注入');
 } else {
     window.__extractorLoaded = true;
 
@@ -334,12 +334,48 @@ const DouyinExtractor = (function() {
         // 用户提供的正确 API 端点
         apiUrl: 'https://creator.douyin.com/janus/douyin/creator/pc/work_list',
         maxPages: 50,
-        pageSize: 12
+        pageSize: 12,
+        cutoffDate: new Date('2026-05-25')
     };
     
     let allData = [];
     let currentPage = 1;
     let isRunning = false;
+    
+    /**
+     * 判断时间戳是否在截止日期之后（包含截止日期当天）
+     */
+    function isValidTimestamp(timestamp) {
+        if (!timestamp) return false;
+        const cutoffTs = Math.floor(config.cutoffDate.getTime() / 1000);
+        return timestamp >= cutoffTs;
+    }
+    
+    /**
+     * 检查是否需要停止抓取：前三项都要检查，第四项及以后只要有一条过期就停止
+     */
+    function checkCutoffDate() {
+        if (allData.length === 0) return false;
+        
+        // 按发布时间倒序排序
+        const sortedData = [...allData].sort((a, b) => b.createTimestamp - a.createTimestamp);
+        
+        // 检查所有数据中是否有任何一条超过截止日期
+        for (let i = 0; i < sortedData.length; i++) {
+            if (!isValidTimestamp(sortedData[i].createTimestamp)) {
+                // 如果是前四项中有过期数据，或者第四项后有任意过期数据
+                if (i >= 3) {
+                    console.log(`[DouyinExtractor] ⚠️ 检测到第 ${i + 1} 条数据 (${sortedData[i].title}) 超过截止日期，停止抓取`);
+                    return true;
+                } else if (i < 3) {
+                    // 前三项也要检查，但前三项本身不决定是否停止，只有当后面有过期数据时才停止
+                    console.log(`[DouyinExtractor] ℹ️ 前三项中检测到过期数据：${sortedData[i].title}`);
+                }
+            }
+        }
+        
+        return false;
+    }
     
     /**
      * 解析播放量文本（如"1.2 万”、"10 万+"等）
@@ -415,7 +451,7 @@ const DouyinExtractor = (function() {
                     ? video.cover.url_list[0] : '',
                 publishTime: timestampToDateStr(item.create_time),
                 createTimestamp: item.create_time || 0,
-                // 审核状态：true=已审核, false=未审核
+                // 审核状态：true=已审核，false=未审核
                 reviewed: !!(item.status && item.status.reviewed),
                 // 合集信息
                 mixName: (item.mix_info && item.mix_info.mix_name) || '',
@@ -755,12 +791,14 @@ const DouyinExtractor = (function() {
             return { success: false, message: '暂无数据可导出！' };
         }
         
-        let csv = '\uFEFF' + '作品名称，播放数，点赞数，评论数，分享数，视频链接，发布时间\n';
+        let csv = '\uFEFF' + '发布日期，视频链接，播放量，点赞，评论，收藏，转发\n';
         dataToExport.forEach(item => {
             const title = (item.title || '').replace(/"/g, '""');
             const url = item.url || '';
             const publishTime = item.publishTime || '';
-            csv += `"${title}",${item.playCount},${item.likeCount || 0},${item.commentCount || 0},${item.shareCount || 0},"${url}","${publishTime}"\n`;
+            const fullDate = item.publishTime || '';
+            const publishDate = fullDate.split(' ')[0] || '';
+            csv += `\"${publishDate}\",\"${url}\",${item.playCount || 0},${item.likeCount || 0},${item.commentCount || 0},${item.collectCount || 0},${item.shareCount || 0}\n`;
         });
         
         const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
@@ -907,8 +945,6 @@ const DouyinExtractor = (function() {
             const maxPages = config.maxPages;
             let cursor = 0;
             let pageCount = 0;
-            let emptyPageCount = 0;  // 记录连续无新数据的页数
-            const maxEmptyPages = 3;  // 连续 3 页无新数据则停止
             
             while (pageCount < maxPages && isRunning) {
                 console.log(`\n[DouyinExtractor] === 正在获取第 ${pageCount + 1} 页数据 (cursor: ${cursor}) ===`);
@@ -932,12 +968,7 @@ const DouyinExtractor = (function() {
                         console.error('[DouyinExtractor]', result.error);
                     }
                     console.log('[DouyinExtractor] ⏹ API 返回错误或空数据，停止抓取');
-                    emptyPageCount++;
-                    if (emptyPageCount >= maxEmptyPages) {
-                        break;
-                    }
-                    pageCount++;
-                    continue;
+                    break;
                 }
                 
                 // result.tasks 已由 fetchWorkList 统一格式化为标准化字段，直接使用
@@ -947,31 +978,64 @@ const DouyinExtractor = (function() {
                 const newWorks = extractedData.filter(work => !existingUrls.has(work.url));
                 
                 if (newWorks.length > 0) {
-                    emptyPageCount = 0;  // 有新数据时重置空页数计数器
+                    // 过滤出符合截止日期的数据
+                    const validWorks = [];
+                    for (const work of newWorks) {
+                        if (isValidTimestamp(work.createTimestamp)) {
+                            validWorks.push(work);
+                        }
+                    }
                     
-                    allData = allData.concat(newWorks);
-                    
-                    console.log(`[DouyinExtractor] 📊 第 ${pageCount + 1} 页：新增 ${newWorks.length} 条数据，累计 ${allData.length} 条`);
-                    
-                    chrome.runtime.sendMessage({
-                        action: 'updateDouyinData',
-                        count: newWorks.length,
-                        total: allData.length
-                    }).catch(console.error);
-                    
-                    // 通知进度更新
-                    notifyProgress(true, pageCount + 2, maxPages, newWorks.length, allData.length);
-                    
-                    if ((pageCount + 1) % 5 === 0) {
+                    if (validWorks.length > 0) {
+                        allData = allData.concat(validWorks);
+                        
+                        console.log(`[DouyinExtractor] 📊 第 ${pageCount + 1} 页：新增 ${validWorks.length} 条数据，累计 ${allData.length} 条`);
+                        
+                        chrome.runtime.sendMessage({
+                            action: 'updateDouyinData',
+                            count: validWorks.length,
+                            total: allData.length
+                        }).catch(console.error);
+                        
+                        // 通知进度更新
+                        notifyProgress(true, pageCount + 2, maxPages, validWorks.length, allData.length);
+                        
+                        // 检查是否满足停止条件：第四项及以后有过期数据
+                        const shouldStop = checkCutoffDate();
+                        if (shouldStop) {
+                            console.log('[DouyinExtractor] ⏹️ 检测到超过截止日期的数据，停止抓取');
+                            await saveDataToStorage();
+                            isRunning = false;
+                            
+                            notifyProgress(false, pageCount + 1, maxPages, 0, allData.length);
+                            
+                            return { 
+                                success: true, 
+                                totalCount: allData.length,
+                                message: `在第 ${pageCount + 1} 页检测到已超过截止日期的数据，停止抓取`
+                            };
+                        }
+                        
+                        if ((pageCount + 1) % 5 === 0) {
+                            await saveDataToStorage();
+                        }
+                    } else {
+                        // 如果这一页所有数据都过期了
+                        console.log(`[DouyinExtractor] ⏹️ 第 ${pageCount + 1} 页已无符合截止日期的数据，停止抓取`);
                         await saveDataToStorage();
+                        isRunning = false;
+                        
+                        notifyProgress(false, pageCount + 1, maxPages, 0, allData.length);
+                        
+                        return { 
+                            success: true, 
+                            totalCount: allData.length,
+                            message: `在第 ${pageCount + 1} 页检测到已超过截止日期的数据，停止抓取`
+                        };
                     }
                 } else {
                     console.log(`[DouyinExtractor] △ 第 ${pageCount + 1} 页没有新数据`);
-                    emptyPageCount++;
-                    if (emptyPageCount >= maxEmptyPages) {
-                        console.log('[DouyinExtractor] ⏹ 连续', emptyPageCount, '页无新数据，停止抓取');
-                        break;
-                    }
+                    break;
                 }
                 
                 cursor = result.cursor || (cursor + config.pageSize);
