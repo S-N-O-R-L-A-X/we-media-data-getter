@@ -7,8 +7,24 @@
  * 所有平台提取器的抽象基类
  */
 class BaseExtractor {
-    constructor(config) {
-        this.config = config;
+    constructor(userConfig = {}) {
+        // 从全局配置获取默认值，然后与用户配置合并
+        this.defaultConfig = {
+            cutoffDate: new Date('2026-05-25'),
+            maxPages: 50,
+            autoPageDelay: 3000,
+            waitForPageLoadTimeout: 15000,
+            enableNotifications: true,
+            exportFormat: 'csv',
+            includeRawData: false
+        };
+        
+        // 合并默认配置和用户配置
+        this.config = {
+            ...this.defaultConfig,
+            ...userConfig
+        };
+        
         this.allData = [];
         this.currentPage = 1;
         this.isRunning = false;
@@ -42,9 +58,19 @@ class BaseExtractor {
 
     /**
      * Validate if timestamp meets cutoff date criteria
-     * @param {number} timestamp
-     * @returns {boolean}
+     * @param {number} timestamp - Unix timestamp in seconds
+     * @returns {boolean} - true if valid (before cutoff date)
      */
+    isValidTimestamp(timestamp) {
+        if (!timestamp || !this.config.cutoffDate) return true;
+        
+        const cutoff = this.config.cutoffDate instanceof Date 
+            ? this.config.cutoffDate 
+            : new Date(this.config.cutoffDate);
+            
+        const timestampDate = new Date(timestamp * 1000);
+        return timestampDate >= cutoff;
+    }
 
     /**
      * Extract data from current page only

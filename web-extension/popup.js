@@ -7,7 +7,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     console.log('[Popup] Received message:', message);
     
     if (message.action === 'extractionProgress') {
-        const currentPageEl = document.getElementById('currentPage');
         const totalCountEl = document.getElementById('totalCount');
         const extractionStatusEl = document.getElementById('extractionStatus');
         const startAutoBtn = document.getElementById('startAutoBtn');
@@ -15,7 +14,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         const messageBox = document.getElementById('messageBox');
         
         // 更新 UI 状态
-        if (currentPageEl) currentPageEl.textContent = message.currentPage || '--';
         if (totalCountEl) totalCountEl.textContent = message.totalItems || message.total || '0';
         
         if (extractionStatusEl) {
@@ -56,13 +54,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
 document.addEventListener('DOMContentLoaded', async () => {
     // DOM 元素引用
-    const currentPageEl = document.getElementById('currentPage');
     const totalCountEl = document.getElementById('totalCount');
     const extractionStatusEl = document.getElementById('extractionStatus');
     
     const startAutoBtn = document.getElementById('startAutoBtn');
     const exportCsvBtn = document.getElementById('exportCsvBtn');
     const clearDataBtn = document.getElementById('clearDataBtn');
+    const settingsBtn = document.getElementById('settingsBtn');
     
     const pageTitle = document.getElementById('pageTitle');
     
@@ -70,6 +68,18 @@ document.addEventListener('DOMContentLoaded', async () => {
     
     // 当前平台类型
     let currentPlatform = 'tieba'; // 'tieba' 或 'douyin'
+    
+    // 设置模态框元素
+    let settingsModal = null;
+    let cutoffDateInput = null;
+    let maxPagesInput = null;
+    let autoPageDelayInput = null;
+    let waitForPageLoadTimeoutInput = null;
+    let enableNotificationsCheckbox = null;
+    let exportFormatSelect = null;
+    let saveSettingsBtn = null;
+    let resetSettingsBtn = null;
+    let closeSettingsBtn = null;
 
     // 显示消息
     function showMessage(message, type = 'info') {
@@ -162,7 +172,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     
     // 更新 UI 状态
     function updateUI(isRunning, currentPage, total) {
-        if (currentPageEl) currentPageEl.textContent = currentPage || '--';
         if (totalCountEl) totalCountEl.textContent = total || '0';
         
         if (extractionStatusEl) {
@@ -172,6 +181,138 @@ document.addEventListener('DOMContentLoaded', async () => {
         
         if (startAutoBtn) startAutoBtn.disabled = isRunning;
         if (exportCsvBtn) exportCsvBtn.disabled = isRunning || (total <= 0);
+    }
+    
+    // ====================
+    // 设置相关功能
+    // ====================
+    
+    // 打开设置模态框
+    async function openSettings() {
+        if (!settingsModal) return;
+        
+        settingsModal.classList.remove('hidden');
+        
+        // 从 storage 加载当前配置
+        const config = await ConfigManager.get();
+        
+        // 填充表单
+        if (cutoffDateInput) {
+            const cutoffDate = new Date(config.cutoffDate);
+            cutoffDateInput.value = cutoffDate.toISOString().split('T')[0];
+        }
+        
+        if (maxPagesInput) maxPagesInput.value = config.maxPages;
+        if (autoPageDelayInput) autoPageDelayInput.value = config.autoPageDelay;
+        if (waitForPageLoadTimeoutInput) waitForPageLoadTimeoutInput.value = config.waitForPageLoadTimeout;
+        if (enableNotificationsCheckbox) enableNotificationsCheckbox.checked = config.enableNotifications;
+        if (exportFormatSelect) exportFormatSelect.value = config.exportFormat;
+    }
+    
+    // 关闭设置模态框
+    function closeSettings() {
+        if (settingsModal) {
+            settingsModal.classList.add('hidden');
+        }
+    }
+    
+    // 保存设置
+    async function saveSettings() {
+        try {
+            const cutoffDateStr = cutoffDateInput?.value;
+            if (!cutoffDateStr) {
+                showMessage('⚠️ 请选择截止日期', 'warning');
+                return;
+            }
+            
+            const config = {
+                cutoffDate: new Date(cutoffDateStr).toISOString(),
+                maxPages: parseInt(maxPagesInput?.value, 10),
+                autoPageDelay: parseInt(autoPageDelayInput?.value, 10),
+                waitForPageLoadTimeout: parseInt(waitForPageLoadTimeoutInput?.value, 10),
+                enableNotifications: enableNotificationsCheckbox?.checked ?? true,
+                exportFormat: exportFormatSelect?.value || 'csv'
+            };
+            
+            // 验证配置
+            const validation = ConfigManager.validate(config);
+            if (!validation.valid) {
+                showMessage('⚠️ ' + validation.errors.join(', '), 'warning');
+                return;
+            }
+            
+            // 保存配置
+            await ConfigManager.save(config);
+            
+            closeSettings();
+            showMessage('✅ 设置已保存', 'success');
+        } catch (error) {
+            console.error('Save settings error:', error);
+            showMessage('❌ 保存失败：' + error.message, 'error');
+        }
+    }
+    
+    // 重置设置为默认值
+    async function resetSettings() {
+        if (!confirm('确定要重置为默认设置吗？')) {
+            return;
+        }
+        
+        try {
+            await ConfigManager.resetToDefault();
+            
+            // 刷新表单
+            await openSettings();
+            
+            showMessage('✅ 已重置为默认设置', 'success');
+        } catch (error) {
+            console.error('Reset settings error:', error);
+            showMessage('❌ 重置失败：' + error.message, 'error');
+        }
+    }
+    
+    // 初始化设置功能
+    function initSettings() {
+        settingsModal = document.getElementById('settingsModal');
+        cutoffDateInput = document.getElementById('cutoffDate');
+        maxPagesInput = document.getElementById('maxPages');
+        autoPageDelayInput = document.getElementById('autoPageDelay');
+        waitForPageLoadTimeoutInput = document.getElementById('waitForPageLoadTimeout');
+        enableNotificationsCheckbox = document.getElementById('enableNotifications');
+        exportFormatSelect = document.getElementById('exportFormat');
+        saveSettingsBtn = document.getElementById('saveSettingsBtn');
+        resetSettingsBtn = document.getElementById('resetSettingsBtn');
+        closeSettingsBtn = document.getElementById('closeSettingsBtn');
+        
+        // 绑定事件
+        if (settingsBtn) {
+            settingsBtn.addEventListener('click', openSettings);
+        }
+        if (closeSettingsBtn) {
+            closeSettingsBtn.addEventListener('click', closeSettings);
+        }
+        if (saveSettingsBtn) {
+            saveSettingsBtn.addEventListener('click', saveSettings);
+        }
+        if (resetSettingsBtn) {
+            resetSettingsBtn.addEventListener('click', resetSettings);
+        }
+        
+        // 点击模态框外部关闭
+        if (settingsModal) {
+            settingsModal.addEventListener('click', (e) => {
+                if (e.target === settingsModal) {
+                    closeSettings();
+                }
+            });
+        }
+        
+        // ESC 键关闭
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape' && !settingsModal.classList.contains('hidden')) {
+                closeSettings();
+            }
+        });
     }
     
     // 初始化页面标题和检查是否在正确的页面
@@ -241,7 +382,11 @@ document.addEventListener('DOMContentLoaded', async () => {
     // 开始自动抓取
     async function startAutoExtraction() {
         try {
-            const response = await sendMessageToContent('startAutoExtraction', { pages: 42 });
+            // 从全局配置获取最大页数
+            const config = await ConfigManager.get(['maxPages']);
+            const pages = config.maxPages || 42;
+            
+            const response = await sendMessageToContent('startAutoExtraction', { pages: pages });
             if (response && response.success) {
                 updateUI(true, 0, 0);
                 showMessage(`✅ 自动抓取已开始`, 'success');
@@ -307,6 +452,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (exportCsvBtn) exportCsvBtn.addEventListener('click', exportCSV);
     if (clearDataBtn) clearDataBtn.addEventListener('click', clearData);
     
+    // 初始化设置功能
+    initSettings();
+    
     // 从 storage 恢复提取状态
     async function restoreExtractionState() {
         try {
@@ -321,7 +469,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                 updateUI(true, state.currentPage, state.totalItems);
                 showMessage(`⏳ 检测到正在进行的抓取任务 (${state.platform})`, 'info');
                 
-                // 如果10分钟后状态未更新，自动清除
+                // 如果 10 分钟后状态未更新，自动清除
                 if (state.lastUpdate) {
                     const lastUpdate = new Date(state.lastUpdate);
                     const now = new Date();

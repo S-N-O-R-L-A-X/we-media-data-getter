@@ -2,30 +2,16 @@
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=520">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>视频数据提取器</title>
-    <style>
-        body {
-            width: 520px !important;
-            max-width: 520px !important;
-            min-width: 520px !important;
-            overflow-x: hidden !important;
-        }
-        html {
-            width: 520px !important;
-            max-width: 520px !important;
-        }
-        #app, .container {
-            width: 520px !important;
-            max-width: 520px !important;
-        }
-    </style>
     <link rel="stylesheet" href="popup.css">
 </head>
 <body>
     <div class="container">
         <header>
             <h1 id="pageTitle">📊 视频数据提取器</h1>
+            <!-- 设置按钮 -->
+            <button id="settingsBtn" class="btn btn-settings" title="设置">⚙️</button>
         </header>
 
         <!-- 状态信息 -->
@@ -66,10 +52,65 @@
             </button>
         </section>
 
+        <!-- 设置模态框 -->
+        <div id="settingsModal" class="modal hidden">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h3>⚙️ 全局设置</h3>
+                    <button id="closeSettingsBtn" class="btn-close">×</button>
+                </div>
+                <div class="modal-body">
+                    <div class="form-group">
+                        <label for="cutoffDate">截止日期</label>
+                        <input type="date" id="cutoffDate" class="form-control">
+                        <small class="form-hint">只抓取该日期之后的内容</small>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label for="maxPages">最大抓取页数</label>
+                        <input type="number" id="maxPages" class="form-control" min="1" max="1000" value="50">
+                        <small class="form-hint">每次最多抓取的页数 (1-1000)</small>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label for="autoPageDelay">翻页延迟 (毫秒)</label>
+                        <input type="number" id="autoPageDelay" class="form-control" min="100" max="60000" value="3000">
+                        <small class="form-hint">自动翻页前的等待时间</small>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label for="waitForPageLoadTimeout">页面加载超时 (毫秒)</label>
+                        <input type="number" id="waitForPageLoadTimeout" class="form-control" min="5000" max="60000" value="15000">
+                        <small class="form-hint">等待页面加载的最大时间</small>
+                    </div>
+                    
+                    <div class="form-group checkbox-group">
+                        <label class="checkbox-label">
+                            <input type="checkbox" id="enableNotifications" checked>
+                            <span>启用通知提示</span>
+                        </label>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label for="exportFormat">默认导出格式</label>
+                        <select id="exportFormat" class="form-control">
+                            <option value="csv">CSV (推荐)</option>
+                            <option value="json">JSON</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button id="saveSettingsBtn" class="btn btn-success">💾 保存设置</button>
+                    <button id="resetSettingsBtn" class="btn btn-secondary">↩️ 重置为默认</button>
+                </div>
+            </div>
+        </div>
+
         <!-- 消息提示 -->
         <div id="messageBox" class="message-box"></div>
     </div>
 
+    <script src="config-manager.js"></script>
     <script src="popup.js"></script>
 </body>
 </html>
