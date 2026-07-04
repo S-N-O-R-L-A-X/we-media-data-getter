@@ -6,22 +6,25 @@
  * 全局配置管理器 - 用于管理所有 extractors 共享的配置项
  */
 class ConfigManager {
-    // 默认配置
+    // 默认配置（不提供默认日期，让 extractor 自己决定是否过滤）
     static DEFAULT_CONFIG = {
-        cutoffDate: new Date('2026-05-25').toISOString(), // 默认截止日期
-        maxPages: 50,                                   // 最大抓取页数
-        autoPageDelay: 3000,                            // 自动翻页延迟 (毫秒)
-        waitForPageLoadTimeout: 15000,                  // 页面加载等待超时 (毫秒)
-        enableNotifications: true,                      // 启用通知
-        exportFormat: 'csv',                            // 导出格式
-        includeRawData: false                           // 是否包含原始数据
+        cutoffDate: null,                                // 不设置默认日期
+        maxPages: 50,                                    // 最大抓取页数
+        autoPageDelay: 3000,                             // 自动翻页延迟 (毫秒)
+        waitForPageLoadTimeout: 15000,                   // 页面加载等待超时 (毫秒)
+        enableNotifications: true,                       // 启用通知
+        exportFormat: 'csv',                             // 导出格式
+        includeRawData: false                            // 是否包含原始数据
     };
 
     // 配置键名
     static STORAGE_KEY = 'globalConfig';
+    
+    // 缓存的配置 - 用于同步访问（由 async get() 填充）
+    static _cachedConfig = null;
 
     /**
-     * 获取当前配置
+     * 获取当前配置（异步）
      * @param {Object} keys - 要获取的配置键列表，如果为 null 则获取全部
      * @returns {Promise<Object>} 配置对象
      */
@@ -35,10 +38,24 @@ class ConfigManager {
                     const storedConfig = result[this.STORAGE_KEY] || {};
                     // 合并默认配置
                     const mergedConfig = { ...this.DEFAULT_CONFIG, ...storedConfig };
+                    // 缓存配置供同步访问
+                    this._cachedConfig = mergedConfig;
                     resolve(mergedConfig);
                 }
             });
         });
+    }
+    
+    /**
+     * 获取当前配置（同步）- 使用缓存或默认配置
+     * @returns {Object} 配置对象
+     */
+    static getSync() {
+        if (this._cachedConfig) {
+            return { ...this._cachedConfig };
+        }
+        // 如果没有缓存，返回默认配置的副本
+        return { ...this.DEFAULT_CONFIG };
     }
 
     /**
@@ -187,6 +204,18 @@ class ConfigManager {
         };
     }
 }
+
+// 添加一个全局函数，用于在 content-script 加载时立即获取配置
+window.__loadGlobalConfig = async function() {
+    if (typeof ConfigManager !== 'undefined') {
+        try {
+            await ConfigManager.get();
+            console.log('[ConfigLoader] Global config loaded:', ConfigManager.getSync());
+        } catch (e) {
+            console.error('[ConfigLoader] Failed to load config:', e);
+        }
+    }
+};
 
 // 导出到全局作用域
 if (typeof window !== 'undefined') {

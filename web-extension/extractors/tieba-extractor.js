@@ -7,12 +7,8 @@
  */
 class TiebaExtractor extends BaseExtractor {
     constructor() {
-        super({
-            cutoffDate: new Date('2026-05-25'),
-            maxPages: 42,
-            autoPageDelay: 3000,
-            waitForPageLoadTimeout: 15000
-        });
+        // 不设置任何默认值，直接从 ConfigManager 获取
+        super({});
     }
 
     getPlatformName() {

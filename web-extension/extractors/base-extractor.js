@@ -8,9 +8,9 @@
  */
 class BaseExtractor {
     constructor(userConfig = {}) {
-        // 从全局配置获取默认值，然后与用户配置合并
+        // 默认配置（作为后备）
         this.defaultConfig = {
-            cutoffDate: new Date('2026-05-25'),
+            cutoffDate: null,  // 不使用硬编码的默认值，直接从 ConfigManager 获取
             maxPages: 50,
             autoPageDelay: 3000,
             waitForPageLoadTimeout: 15000,
@@ -19,9 +19,16 @@ class BaseExtractor {
             includeRawData: false
         };
         
-        // 合并默认配置和用户配置
+        // 从 ConfigManager 获取全局配置
+        let globalConfig = {};
+        if (typeof ConfigManager !== 'undefined') {
+            globalConfig = ConfigManager.getSync();
+        }
+        
+        // 优先级：用户配置 > ConfigManager 全局配置 > 默认配置
         this.config = {
             ...this.defaultConfig,
+            ...globalConfig,
             ...userConfig
         };
         
@@ -59,7 +66,7 @@ class BaseExtractor {
     /**
      * Validate if timestamp meets cutoff date criteria
      * @param {number} timestamp - Unix timestamp in seconds
-     * @returns {boolean} - true if valid (before cutoff date)
+     * @returns {boolean} - true if valid (on or after cutoff date)
      */
     isValidTimestamp(timestamp) {
         if (!timestamp || !this.config.cutoffDate) return true;

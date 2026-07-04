@@ -4,11 +4,9 @@
 
 class DouyinExtractor extends BaseExtractor {
     constructor() {
+        // 不设置任何默认值，直接从 ConfigManager 获取
         super({
-            apiUrl: 'https://creator.douyin.com/janus/douyin/creator/pc/work_list',
-            maxPages: 50,
-            pageSize: 12,
-            cutoffDate: new Date('2026-05-25')
+            apiUrl: 'https://creator.douyin.com/janus/douyin/creator/pc/work_list'
         });
     }
 

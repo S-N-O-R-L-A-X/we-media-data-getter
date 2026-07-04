@@ -2,11 +2,67 @@
 // 百度贴吧 & 抖音视频数据提取器 - Content Script
 // ============================================
 
+// 内联 ConfigManager 核心功能（确保在所有 extractor 之前可用）
+if (typeof ConfigManager === 'undefined') {
+    const _ConfigManager = {
+        DEFAULT_CONFIG: {
+            cutoffDate: null,
+            maxPages: 50,
+            autoPageDelay: 3000,
+            waitForPageLoadTimeout: 15000,
+            enableNotifications: true,
+            exportFormat: 'csv',
+            includeRawData: false
+        },
+        STORAGE_KEY: 'globalConfig',
+        _cachedConfig: null,
+        
+        getSync: function() {
+            if (this._cachedConfig) {
+                return { ...this._cachedConfig };
+            }
+            return { ...this.DEFAULT_CONFIG };
+        },
+        
+        async get(keys = null) {
+            return new Promise((resolve, reject) => {
+                const query = keys ? { [this.STORAGE_KEY]: keys } : this.STORAGE_KEY;
+                chrome.storage.local.get(query, (result) => {
+                    if (chrome.runtime.lastError) {
+                        reject(new Error(chrome.runtime.lastError.message));
+                    } else {
+                        const storedConfig = result[this.STORAGE_KEY] || {};
+                        const mergedConfig = { ...this.DEFAULT_CONFIG, ...storedConfig };
+                        this._cachedConfig = mergedConfig;
+                        resolve(mergedConfig);
+                    }
+                });
+            });
+        }
+    };
+    
+    if (typeof window !== 'undefined') {
+        window.ConfigManager = _ConfigManager;
+    }
+}
+
 // 防止重复注入
 if (window.__extractorLoaded) {
     console.log('[ContentScript] 跳过重复注入');
 } else {
     window.__extractorLoaded = true;
+    
+    // 初始化配置缓存
+    (async () => {
+        if (window.ConfigManager) {
+            try {
+                await window.ConfigManager.get();
+                console.log('[ConfigLoader] Global config loaded:', window.ConfigManager.getSync());
+            } catch (e) {
+                console.error('[ConfigLoader] Failed to load config:', e);
+            }
+        }
+    })();
 
 // ============================================
 // 百度贴吧视频数据提取器
@@ -15,12 +71,37 @@ if (window.__extractorLoaded) {
 const TiebaExtractor = (function() {
     'use strict';
 
-    const config = {
-        cutoffDate: new Date('2026-05-25'),
+    // 初始配置（默认值）
+    let config = {
+        cutoffDate: null,
         maxPages: 42,
         autoPageDelay: 3000,
         waitForPageLoadTimeout: 15000
     };
+    
+    // 从 ConfigManager 加载最新配置（异步读取 storage）
+    async function loadConfig() {
+        if (typeof ConfigManager !== 'undefined') {
+            try {
+                // 使用 async get() 确保获取最新存储的配置
+                const globalConfig = await ConfigManager.get();
+                if (globalConfig.cutoffDate) {
+                    try {
+                        config.cutoffDate = new Date(globalConfig.cutoffDate);
+                    } catch (e) {
+                        console.error('[TiebaExtractor] 解析 cutoffDate 失败:', e);
+                        config.cutoffDate = null;
+                    }
+                } else {
+                    config.cutoffDate = null;
+                }
+                config.maxPages = globalConfig.maxPages || config.maxPages;
+                console.log('[TiebaExtractor] ✅ 配置已加载:', config);
+            } catch (e) {
+                console.error('[TiebaExtractor] 加载配置失败:', e);
+            }
+        }
+    }
 
     let allData = [];
     let currentPage = 1;
@@ -53,6 +134,8 @@ const TiebaExtractor = (function() {
 
     function isValidTimestamp(timestamp) {
         if (!timestamp) return false;
+        // 如果没有设置截止日期，则不过滤（返回 true 保留所有数据）
+        if (!config.cutoffDate) return true;
         const cutoffTs = Math.floor(config.cutoffDate.getTime() / 1000);
         return timestamp >= cutoffTs;
     }
@@ -97,6 +180,8 @@ const TiebaExtractor = (function() {
     }
 
     async function extractCurrentPage() {
+        // 每次提取前重新加载配置，确保使用最新截止日期
+        await loadConfig();
         console.log('[TiebaExtractor] 正在提取当前页面数据...');
 
         const apiResult = await fetchDataFromAPI(currentPage);
@@ -142,6 +227,9 @@ const TiebaExtractor = (function() {
     }
 
     async function startAutoExtraction() {
+        // 开始抓取前重新加载配置，确保使用最新截止日期
+        await loadConfig();
+        
         if (isRunning) {
             const error = '正在进行抓取，请稍后再试';
             console.error('[TiebaExtractor]', error);
@@ -330,13 +418,38 @@ const TiebaExtractor = (function() {
 const DouyinExtractor = (function() {
     'use strict';
     
-    const config = {
+    // 初始配置（默认值）
+    let config = {
         // 用户提供的正确 API 端点
         apiUrl: 'https://creator.douyin.com/janus/douyin/creator/pc/work_list',
         maxPages: 50,
         pageSize: 12,
-        cutoffDate: new Date('2026-05-25')
+        cutoffDate: null
     };
+    
+    // 从 ConfigManager 加载最新配置（异步读取 storage）
+    async function loadConfig() {
+        if (typeof ConfigManager !== 'undefined') {
+            try {
+                // 使用 async get() 确保获取最新存储的配置
+                const globalConfig = await ConfigManager.get();
+                if (globalConfig.cutoffDate) {
+                    try {
+                        config.cutoffDate = new Date(globalConfig.cutoffDate);
+                    } catch (e) {
+                        console.error('[DouyinExtractor] 解析 cutoffDate 失败:', e);
+                        config.cutoffDate = null;
+                    }
+                } else {
+                    config.cutoffDate = null;
+                }
+                config.maxPages = globalConfig.maxPages || config.maxPages;
+                console.log('[DouyinExtractor] ✅ 配置已加载:', config);
+            } catch (e) {
+                console.error('[DouyinExtractor] 加载配置失败:', e);
+            }
+        }
+    }
     
     let allData = [];
     let currentPage = 1;
@@ -347,6 +460,8 @@ const DouyinExtractor = (function() {
      */
     function isValidTimestamp(timestamp) {
         if (!timestamp) return false;
+        // 如果没有设置截止日期，则不过滤（返回 true 保留所有数据）
+        if (!config.cutoffDate) return true;
         const cutoffTs = Math.floor(config.cutoffDate.getTime() / 1000);
         return timestamp >= cutoffTs;
     }
@@ -827,6 +942,8 @@ const DouyinExtractor = (function() {
      * 从当前页面提取数据
      */
     async function extractCurrentPage() {
+        // 每次提取前重新加载配置，确保使用最新截止日期
+        await loadConfig();
         console.log('[DouyinExtractor] 正在提取当前页面数据...');
         
         try {
@@ -840,21 +957,28 @@ const DouyinExtractor = (function() {
                 const existingUrls = new Set(allData.map(item => item.url));
                 const newData = extractedData.filter(item => !existingUrls.has(item.url));
                 
-                allData = allData.concat(newData);
+                // 按截止日期过滤
+                const filtered = newData.filter(item => isValidTimestamp(item.createTimestamp));
                 
-                console.log(`[DouyinExtractor] 📊 本次提取：${newData.length} 条数据，累计 ${allData.length} 条`);
-                
-                chrome.runtime.sendMessage({
-                    action: 'updateDouyinData',
-                    count: newData.length,
-                    total: allData.length
-                }).catch(console.error);
-                
-                await saveDataToStorage();
+                if (filtered.length > 0) {
+                    allData = allData.concat(filtered);
+                    
+                    console.log(`[DouyinExtractor] 📊 本次提取：${newData.length} 条，符合条件：${filtered.length} 条，累计 ${allData.length} 条`);
+                    
+                    chrome.runtime.sendMessage({
+                        action: 'updateDouyinData',
+                        count: filtered.length,
+                        total: allData.length
+                    }).catch(console.error);
+                    
+                    await saveDataToStorage();
+                } else {
+                    console.log(`[DouyinExtractor] ⏹️ 所有 ${newData.length} 条数据均超过截止日期，无新增`);
+                }
                 
                 return {
                     success: true,
-                    count: newData.length,
+                    count: filtered.length,
                     total: allData.length
                 };
             }
@@ -921,6 +1045,9 @@ const DouyinExtractor = (function() {
      * 开始自动抓取
      */
     async function startAutoExtraction() {
+        // 开始抓取前重新加载配置，确保使用最新截止日期
+        await loadConfig();
+        
         if (isRunning) {
             const error = '正在进行抓取，请稍后再试';
             console.error('[DouyinExtractor]', error);

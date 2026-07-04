@@ -198,8 +198,12 @@ document.addEventListener('DOMContentLoaded', async () => {
         
         // 填充表单
         if (cutoffDateInput) {
-            const cutoffDate = new Date(config.cutoffDate);
-            cutoffDateInput.value = cutoffDate.toISOString().split('T')[0];
+            if (config.cutoffDate) {
+                const cutoffDate = new Date(config.cutoffDate);
+                cutoffDateInput.value = cutoffDate.toISOString().split('T')[0];
+            } else {
+                cutoffDateInput.value = '';
+            }
         }
         
         if (maxPagesInput) maxPagesInput.value = config.maxPages;
