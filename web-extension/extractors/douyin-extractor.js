@@ -64,7 +64,14 @@ class DouyinExtractor extends BaseExtractor {
     }
 
     extractFromAwemeList(awemeList) {
-        return awemeList.map(item => ({
+        // 过滤被屏蔽/删除的视频
+        const filteredList = this.config.filterBlocked
+            ? awemeList.filter(item => !this.isItemBlocked(item))
+            : awemeList;
+        if (this.config.filterBlocked && awemeList.length !== filteredList.length) {
+            console.log(`[DouyinExtractor] 已过滤 ${awemeList.length - filteredList.length} 条被屏蔽/删除的视频`);
+        }
+        return filteredList.map(item => ({
             title: item.caption || item.desc || '',
             playCount: parseInt(item.statistics?.play_count, 10) || 0,
             likeCount: parseInt(item.statistics?.digg_count, 10) || 0,
@@ -87,7 +94,14 @@ class DouyinExtractor extends BaseExtractor {
     }
 
     extractFromItems(items) {
-        return items.map(item => ({
+        // 过滤被屏蔽/删除的视频
+        const filteredList = this.config.filterBlocked
+            ? items.filter(item => !this.isItemBlocked(item))
+            : items;
+        if (this.config.filterBlocked && items.length !== filteredList.length) {
+            console.log(`[DouyinExtractor] 已过滤 ${items.length - filteredList.length} 条被屏蔽/删除的视频`);
+        }
+        return filteredList.map(item => ({
             title: item.description || item.item_title || '',
             playCount: parseInt(item.metrics?.view_count, 10) || 0,
             likeCount: parseInt(item.metrics?.like_count, 10) || 0,
@@ -111,11 +125,8 @@ class DouyinExtractor extends BaseExtractor {
 
     checkCutoffDate() {
         if (!this.allData.length) return false;
-        const sortedData = [...this.allData].sort((a, b) => b.createTimestamp - a.createTimestamp);
-        for (let i = 3; i < sortedData.length; i++) {
-            if (!this.isValidTimestamp(sortedData[i].createTimestamp)) return true;
-        }
-        return false;
+        // Check if any collected data item is before the cutoff date
+        return this.allData.some(item => !this.isValidTimestamp(item.createTimestamp));
     }
 
     async extractCurrentPage() {
@@ -154,14 +165,17 @@ class DouyinExtractor extends BaseExtractor {
                     break;
                 }
                 
+                // Check if any new works are before cutoff date (before filtering)
+                const hasOldData = newWorks.some(w => !this.isValidTimestamp(w.createTimestamp));
                 const validWorks = newWorks.filter(w => this.isValidTimestamp(w.createTimestamp));
                 this.allData.push(...validWorks);
                 this.notifyProgress(true, pageCount + 1, maxPages, validWorks.length, this.allData.length);
                 
-                if (this.checkCutoffDate()) {
+                if (hasOldData) {
                     await this.saveDataToStorage();
                     this.isRunning = false;
                     this.notifyProgress(false, pageCount + 1, maxPages, 0, this.allData.length);
+                    console.log('[DouyinExtractor] Reached cutoff date, stopping extraction');
                     return { success: true, totalCount: this.allData.length };
                 }
                 

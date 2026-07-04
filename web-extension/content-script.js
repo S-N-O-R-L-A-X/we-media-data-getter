@@ -12,7 +12,8 @@ if (typeof ConfigManager === 'undefined') {
             waitForPageLoadTimeout: 15000,
             enableNotifications: true,
             exportFormat: 'csv',
-            includeRawData: false
+            includeRawData: false,
+            filterBlocked: false
         },
         STORAGE_KEY: 'globalConfig',
         _cachedConfig: null,
@@ -64,6 +65,46 @@ if (window.__extractorLoaded) {
         }
     })();
 
+// 加载 filterBlocked 配置
+let _filterBlocked = false;
+(async () => {
+    if (typeof ConfigManager !== 'undefined') {
+        try {
+            const config = await ConfigManager.get();
+            _filterBlocked = config.filterBlocked || false;
+        } catch (e) {
+            console.error('[ContentScript] 加载 filterBlocked 配置失败:', e);
+        }
+    }
+})();
+
+/**
+ * 判断视频是否被屏蔽或删除（独立函数，供内联提取器使用）
+ */
+function isItemBlocked(item) {
+    if (!_filterBlocked) return false;
+    
+    // Tieba-specific: work_status (最关键的判断条件)
+    // work_status: 2=审核中，3=已发布（正常）；4=已删除，5=违规删除（需要过滤）
+    if (item.work_status === 4 || item.work_status === 5) return true;
+    
+    // 通用删除标志
+    if (item.is_delete === 1 || item.is_delete === true) return true;
+    if (item.is_del === 1 || item.is_del === true) return true;
+    if (item.del_flag === 1 || item.del_flag === true) return true;
+    
+    // 状态码判断
+    if (item.status === 2 || item.status === 3 || item.status === 4 || item.status === -1) return true;
+    if (item.aweme_status === 4 || item.aweme_status === 5) return true;
+    
+    // 嵌套状态对象 (Douyin)
+    if (item.status && typeof item.status === 'object') {
+        if (item.status.is_delete === 1 || item.status.is_delete === true) return true;
+    }
+        
+    return false;
+}
+
 // ============================================
 // 百度贴吧视频数据提取器
 // ============================================
@@ -96,6 +137,7 @@ const TiebaExtractor = (function() {
                     config.cutoffDate = null;
                 }
                 config.maxPages = globalConfig.maxPages || config.maxPages;
+                _filterBlocked = globalConfig.filterBlocked || false;
                 console.log('[TiebaExtractor] ✅ 配置已加载:', config);
             } catch (e) {
                 console.error('[TiebaExtractor] 加载配置失败:', e);
@@ -136,8 +178,17 @@ const TiebaExtractor = (function() {
         if (!timestamp) return false;
         // 如果没有设置截止日期，则不过滤（返回 true 保留所有数据）
         if (!config.cutoffDate) return true;
-        const cutoffTs = Math.floor(config.cutoffDate.getTime() / 1000);
-        return timestamp >= cutoffTs;
+        
+        // 获取截止日期的日期部分（去掉时分秒），确保"当天"的数据不被误过滤
+        const cutoffStartOfDay = new Date(config.cutoffDate);
+        cutoffStartOfDay.setHours(0, 0, 0, 0);
+        
+        // 获取当前数据的日期部分
+        const dataDate = new Date(timestamp * 1000);
+        dataDate.setHours(0, 0, 0, 0);
+        
+        // 比较日期（包含当天）
+        return dataDate >= cutoffStartOfDay;
     }
 
     async function fetchDataFromAPI(pageNumber = 1) {
@@ -159,8 +210,31 @@ const TiebaExtractor = (function() {
 
             const works = result.data?.works || [];
             console.log(`[TiebaExtractor] ✅ API 返回了 ${works.length} 条数据（第 ${pageNumber} 页）`);
+            
+            // 调试：打印第一条数据的字段，帮助识别屏蔽/删除的标识
+            if (_filterBlocked && works.length > 0 && pageNumber === 1) {
+                console.group('[TiebaExtractor] 🔍 Debug - 第一条原始数据字段:');
+                Object.keys(works[0]).forEach(key => {
+                    console.log(`  ${key}:`, works[0][key]);
+                });
+                console.groupEnd();
+            }
 
-            const parsedData = works.map(work => ({
+            // 过滤被屏蔽/删除的视频（Tieba 专用增强）
+            const filteredRaw = _filterBlocked
+                ? works.filter(work => {
+                    const blocked = isItemBlocked(work);
+                    if (blocked) {
+                        console.log(`[TiebaExtractor] 🔒 过滤: ${work.title || '无标题'} (status=${work.status}, audit_status=${work.audit_status}, is_delete=${work.is_delete})`);
+                    }
+                    return !blocked;
+                })
+                : works;
+            if (_filterBlocked && works.length !== filteredRaw.length) {
+                console.log(`[TiebaExtractor] 已过滤 ${works.length - filteredRaw.length} 条被屏蔽/删除的视频`);
+            }
+
+            const parsedData = filteredRaw.map(work => ({
                 date: timestampToDate(work.publish_time),
                 url: `https://tieba.baidu.com/p/${work.thread_id}`,
                 title: decodeURIComponent(work.title),
@@ -444,6 +518,7 @@ const DouyinExtractor = (function() {
                     config.cutoffDate = null;
                 }
                 config.maxPages = globalConfig.maxPages || config.maxPages;
+                _filterBlocked = globalConfig.filterBlocked || false;
                 console.log('[DouyinExtractor] ✅ 配置已加载:', config);
             } catch (e) {
                 console.error('[DouyinExtractor] 加载配置失败:', e);
@@ -462,8 +537,17 @@ const DouyinExtractor = (function() {
         if (!timestamp) return false;
         // 如果没有设置截止日期，则不过滤（返回 true 保留所有数据）
         if (!config.cutoffDate) return true;
-        const cutoffTs = Math.floor(config.cutoffDate.getTime() / 1000);
-        return timestamp >= cutoffTs;
+        
+        // 获取截止日期的日期部分（去掉时分秒），确保"当天"的数据不被误过滤
+        const cutoffStartOfDay = new Date(config.cutoffDate);
+        cutoffStartOfDay.setHours(0, 0, 0, 0);
+        
+        // 获取当前数据的日期部分
+        const dataDate = new Date(timestamp * 1000);
+        dataDate.setHours(0, 0, 0, 0);
+        
+        // 比较日期（包含当天）
+        return dataDate >= cutoffStartOfDay;
     }
     
     /**
@@ -542,7 +626,14 @@ const DouyinExtractor = (function() {
      * 从 aweme_list（详细数据）提取作品信息
      */
     function extractFromAwemeList(awemeList) {
-        return awemeList.map(item => {
+        // 过滤被屏蔽/删除的视频
+        const filteredList = _filterBlocked
+            ? awemeList.filter(item => !isItemBlocked(item))
+            : awemeList;
+        if (_filterBlocked && awemeList.length !== filteredList.length) {
+            console.log(`[DouyinExtractor] 已过滤 ${awemeList.length - filteredList.length} 条被屏蔽/删除的视频`);
+        }
+        return filteredList.map(item => {
             const statistics = item.statistics || {};
             const author = item.author || {};
             const video = item.video || {};
@@ -583,7 +674,14 @@ const DouyinExtractor = (function() {
      * 从 items（简要数据 + metrics）提取作品信息
      */
     function extractFromItems(items) {
-        return items.map(item => {
+        // 过滤被屏蔽/删除的视频
+        const filteredList = _filterBlocked
+            ? items.filter(item => !isItemBlocked(item))
+            : items;
+        if (_filterBlocked && items.length !== filteredList.length) {
+            console.log(`[DouyinExtractor] 已过滤 ${items.length - filteredList.length} 条被屏蔽/删除的视频`);
+        }
+        return filteredList.map(item => {
             const metrics = item.metrics || {};
             const cover = item.cover || {};
             

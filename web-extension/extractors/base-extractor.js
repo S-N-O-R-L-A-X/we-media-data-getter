@@ -16,7 +16,8 @@ class BaseExtractor {
             waitForPageLoadTimeout: 15000,
             enableNotifications: true,
             exportFormat: 'csv',
-            includeRawData: false
+            includeRawData: false,
+            filterBlocked: false
         };
         
         // 从 ConfigManager 获取全局配置
@@ -71,12 +72,55 @@ class BaseExtractor {
     isValidTimestamp(timestamp) {
         if (!timestamp || !this.config.cutoffDate) return true;
         
+        // 将截止日期解析为本地日期（忽略时分秒），只比较日期部分
         const cutoff = this.config.cutoffDate instanceof Date 
             ? this.config.cutoffDate 
             : new Date(this.config.cutoffDate);
             
+        // 获取截止日期的本地日期字符串 (YYYY-MM-DD)
+        const cutoffYear = cutoff.getFullYear();
+        const cutoffMonth = String(cutoff.getMonth() + 1).padStart(2, '0');
+        const cutoffDay = String(cutoff.getDate()).padStart(2, '0');
+        const cutoffDateStr = `${cutoffYear}-${cutoffMonth}-${cutoffDay}`;
+        
+        // 将时间戳转换为本地日期字符串进行比较
         const timestampDate = new Date(timestamp * 1000);
-        return timestampDate >= cutoff;
+        const year = timestampDate.getFullYear();
+        const month = String(timestampDate.getMonth() + 1).padStart(2, '0');
+        const day = String(timestampDate.getDate()).padStart(2, '0');
+        const timestampDateStr = `${year}-${month}-${day}`;
+        
+        // 按字符串比较日期 (YYYY-MM-DD 格式可以直接按字典序比较)
+        return timestampDateStr >= cutoffDateStr;
+    }
+
+    /**
+     * Check if an item is blocked or deleted
+     * @param {Object} item - Raw API response item
+     * @returns {boolean} - true if item is blocked/deleted (should be filtered out)
+     */
+    isItemBlocked(item) {
+        if (!this.config.filterBlocked) return false;
+        
+        // Tieba-specific: work_status
+        // work_status: 2=审核中，3=已发布（正常）；4=已删除，5=违规删除（需要过滤）
+        if (item.work_status === 4 || item.work_status === 5) return true;
+        
+        // Common blocked/deleted indicators across platforms
+        if (item.is_delete === 1 || item.is_delete === true) return true;
+        if (item.is_del === 1 || item.is_del === true) return true;
+        if (item.del_flag === 1 || item.del_flag === true) return true;
+        
+        // Status codes
+        if (item.status === 4 || item.status === -1) return true;
+        if (item.aweme_status === 4 || item.aweme_status === 5) return true;
+        
+        // Nested status object (Douyin aweme_list format)
+        if (item.status && typeof item.status === 'object') {
+            if (item.status.is_delete === 1 || item.status.is_delete === true) return true;
+        }
+        
+        return false;
     }
 
     /**

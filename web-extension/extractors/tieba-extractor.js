@@ -42,7 +42,18 @@ class TiebaExtractor extends BaseExtractor {
             const result = await response.json();
             if (result.no !== 0) return { works: [], error: result.error };
             const works = result.data?.works || [];
-            const parsedData = works.map(work => ({
+            // 过滤被屏蔽/删除的视频（Tieba）
+            const filteredRaw = this.config.filterBlocked 
+                ? works.filter(work => {
+                    const blocked = this.isItemBlocked(work);
+                    if (blocked && console) {
+                        console.log(`[TiebaExtractor] 已过滤：${work.title || '无标题'} (work_status=${work.work_status})`);
+                    }
+                    return !blocked;
+                })
+                : works;
+            
+            const parsedData = filteredRaw.map(work => ({
                 date: this.timestampToDate(work.publish_time),
                 url: `https://tieba.baidu.com/p/${work.thread_id}`,
                 title: decodeURIComponent(work.title),

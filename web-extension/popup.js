@@ -76,6 +76,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     let autoPageDelayInput = null;
     let waitForPageLoadTimeoutInput = null;
     let enableNotificationsCheckbox = null;
+    let filterBlockedCheckbox = null;
     let exportFormatSelect = null;
     let saveSettingsBtn = null;
     let resetSettingsBtn = null;
@@ -210,6 +211,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         if (autoPageDelayInput) autoPageDelayInput.value = config.autoPageDelay;
         if (waitForPageLoadTimeoutInput) waitForPageLoadTimeoutInput.value = config.waitForPageLoadTimeout;
         if (enableNotificationsCheckbox) enableNotificationsCheckbox.checked = config.enableNotifications;
+        if (filterBlockedCheckbox) filterBlockedCheckbox.checked = config.filterBlocked || false;
         if (exportFormatSelect) exportFormatSelect.value = config.exportFormat;
     }
     
@@ -229,12 +231,17 @@ document.addEventListener('DOMContentLoaded', async () => {
                 return;
             }
             
+            // 将截止日期设置为当天的 23:59:59，确保包含截止日期的全天数据
+            const cutoffDateObj = new Date(cutoffDateStr);
+            // 设置为当天最后一秒 (23:59:59)
+            cutoffDateObj.setHours(23, 59, 59, 999);
             const config = {
-                cutoffDate: new Date(cutoffDateStr).toISOString(),
+                cutoffDate: cutoffDateObj.toISOString(),
                 maxPages: parseInt(maxPagesInput?.value, 10),
                 autoPageDelay: parseInt(autoPageDelayInput?.value, 10),
                 waitForPageLoadTimeout: parseInt(waitForPageLoadTimeoutInput?.value, 10),
                 enableNotifications: enableNotificationsCheckbox?.checked ?? true,
+                filterBlocked: filterBlockedCheckbox?.checked ?? false,
                 exportFormat: exportFormatSelect?.value || 'csv'
             };
             
@@ -283,6 +290,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         autoPageDelayInput = document.getElementById('autoPageDelay');
         waitForPageLoadTimeoutInput = document.getElementById('waitForPageLoadTimeout');
         enableNotificationsCheckbox = document.getElementById('enableNotifications');
+        filterBlockedCheckbox = document.getElementById('filterBlocked');
         exportFormatSelect = document.getElementById('exportFormat');
         saveSettingsBtn = document.getElementById('saveSettingsBtn');
         resetSettingsBtn = document.getElementById('resetSettingsBtn');

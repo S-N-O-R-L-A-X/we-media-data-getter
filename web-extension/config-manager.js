@@ -14,7 +14,8 @@ class ConfigManager {
         waitForPageLoadTimeout: 15000,                   // 页面加载等待超时 (毫秒)
         enableNotifications: true,                       // 启用通知
         exportFormat: 'csv',                             // 导出格式
-        includeRawData: false                            // 是否包含原始数据
+        includeRawData: false,                           // 是否包含原始数据
+        filterBlocked: false                             // 是否过滤被屏蔽/删除的视频
     };
 
     // 配置键名
