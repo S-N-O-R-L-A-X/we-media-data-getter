@@ -161,7 +161,3 @@ web-extension/
 ## 许可证
 
 MIT License
-
-## 致谢
-
-本扩展基于原有的 Playwright 脚本移植而来，保留了核心数据提取功能并添加了 Chrome 扩展的用户界面。

@@ -2,12 +2,8 @@
 // Tieba (Baidu Tieba) Extractor - 百度贴吧提取器
 // ============================================
 
-/**
- * Baidu Tieba video data extractor
- */
 class TiebaExtractor extends BaseExtractor {
     constructor() {
-        // 不设置任何默认值，直接从 ConfigManager 获取
         super({});
     }
 
@@ -19,38 +15,25 @@ class TiebaExtractor extends BaseExtractor {
         return url.startsWith('https://tieba.baidu.com/home/creative/work');
     }
 
-    /**
-     * Convert timestamp to date string
-     */
     timestampToDate(timestamp) {
         if (!timestamp) return '';
         const date = new Date(timestamp * 1000);
-        const year = date.getFullYear();
-        const month = String(date.getMonth() + 1).padStart(2, '0');
-        const day = String(date.getDate()).padStart(2, '0');
-        return `${year}-${month}-${day}`;
+        return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
     }
 
     async fetchDataFromAPI(pageNumber = 1) {
-        console.log('[TiebaExtractor] Fetching page ' + pageNumber);
         try {
             const url = new URL('https://tieba.baidu.com/mo/q/work/list');
-            url.searchParams.set('type', "all");
+            url.searchParams.set('type', 'all');
             url.searchParams.set('pn', pageNumber);
             url.searchParams.set('rn', 10);
             const response = await fetch(url.toString());
             const result = await response.json();
             if (result.no !== 0) return { works: [], error: result.error };
             const works = result.data?.works || [];
-            // 过滤被屏蔽/删除的视频（Tieba）
+            
             const filteredRaw = this.config.filterBlocked 
-                ? works.filter(work => {
-                    const blocked = this.isItemBlocked(work);
-                    if (blocked && console) {
-                        console.log(`[TiebaExtractor] 已过滤：${work.title || '无标题'} (work_status=${work.work_status})`);
-                    }
-                    return !blocked;
-                })
+                ? works.filter(w => !this.isItemBlocked(w))
                 : works;
             
             const parsedData = filteredRaw.map(work => ({
@@ -64,6 +47,7 @@ class TiebaExtractor extends BaseExtractor {
                 shareCount: work.share_count || 0,
                 raw: work
             }));
+            
             return { works: parsedData, error: null };
         } catch (error) {
             return { works: [], error: error.message };
@@ -71,6 +55,7 @@ class TiebaExtractor extends BaseExtractor {
     }
 
     async extractCurrentPage() {
+        await this.loadConfig();
         console.log('[TiebaExtractor] Extracting current page...');
         const apiResult = await this.fetchDataFromAPI(this.currentPage);
         if (apiResult.error || !apiResult.works.length) {
@@ -82,41 +67,41 @@ class TiebaExtractor extends BaseExtractor {
         return { success: true, total: this.allData.length };
     }
 
-    async startAutoExtraction(maxPages = this.config.maxPages) {
+    async startAutoExtraction(maxPages = this.config.maxPages, cutoffDate) {
         if (this.isRunning) return { success: false, message: 'Already running' };
+        await this.loadConfig({ cutoffDate });
         this.isRunning = true;
         this.allData = [];
         this.currentPage = 1;
         this.notifyProgress(true, 1, maxPages, 0, 0);
-        
+
         try {
             for (let page = 1; page <= maxPages && this.isRunning; page++) {
                 const apiResult = await this.fetchDataFromAPI(page);
                 if (apiResult.error || !apiResult.works.length) break;
-                
+
                 const existingUrls = new Set(this.allData.map(item => item.url));
                 const newWorks = apiResult.works.filter(w => !existingUrls.has(w.url));
-                
+
                 if (!newWorks.length) {
                     console.log('[TiebaExtractor] No new data on page ' + page);
                     break;
                 }
-                
+
                 const filtered = newWorks.filter(w => this.isValidTimestamp(w.raw?.publish_time));
                 this.allData.push(...filtered);
                 this.notifyProgress(true, page, maxPages, filtered.length, this.allData.length);
-                
-                // Check cutoff
+
                 if (newWorks.some(w => !this.isValidTimestamp(w.raw?.publish_time))) {
                     await this.saveDataToStorage();
                     this.isRunning = false;
                     this.notifyProgress(false, page, maxPages, 0, this.allData.length);
                     return { success: true, totalCount: this.allData.length };
                 }
-                
+
                 if (page % 5 === 0) await this.saveDataToStorage();
             }
-            
+
             this.allData.sort((a, b) => b.date.localeCompare(a.date));
             await this.saveDataToStorage();
             this.isRunning = false;
@@ -130,14 +115,57 @@ class TiebaExtractor extends BaseExtractor {
     }
 
     generateCSV(data) {
-        let csv = '\uFEFF"发布日期","视频标题","视频链接","浏览数","点赞数","评论数","收藏数","分享数"\n';
+        let csv = '\uFEFF"发布日期","视频链接","播放量","点赞","评论","收藏","分享"\n';
         for (const item of data) {
-            csv += `"${item.date}","${(item.title || '').replace(/"/g, '""')}","${item.url}",${item.playCount},${item.agreeCount},${item.commentCount},${item.collectCount},${item.shareCount}\n`;
+            csv += `"${item.date}","${item.url}",${item.playCount},${item.agreeCount},${item.commentCount},${item.collectCount},${item.shareCount}\n`;
         }
         return csv;
     }
+
+    async exportToCSV() {
+        let dataToExport = [];
+        try {
+            const result = await new Promise((resolve) => {
+                chrome.storage.local.get(['tiebaData_batch'], (r) => resolve(r));
+            });
+            if (result.tiebaData_batch && result.tiebaData_batch.length > 0) {
+                dataToExport = result.tiebaData_batch.reverse();
+            } else if (this.allData.length > 0) {
+                dataToExport = this.allData.reverse();
+            }
+        } catch (error) {
+            console.error('[TiebaExtractor] 从 storage 加载数据失败:', error);
+            dataToExport = this.allData;
+        }
+
+        if (dataToExport.length === 0) {
+            return { success: false, message: '暂无数据可导出！' };
+        }
+
+        const csv = this.generateCSV(dataToExport);
+        const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `tieba_videos_${new Date().toISOString().split('T')[0]}.csv`;
+        document.body.appendChild(a);
+        a.click();
+        setTimeout(() => {
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+        }, 100);
+
+        console.log('[TiebaExtractor] ✅ 已导出 ' + dataToExport.length + ' 条数据到 CSV 文件');
+        
+        chrome.runtime.sendMessage({
+            action: 'showNotification',
+            message: `成功导出 ${dataToExport.length} 条数据！`
+        }).catch(console.error);
+
+        return { success: true, count: dataToExport.length };
+    }
 }
 
-if (typeof window !== 'undefined') {
-    window.TiebaExtractor = TiebaExtractor;
+if (typeof globalThis !== 'undefined') {
+    globalThis.TiebaExtractor = TiebaExtractor;
 }

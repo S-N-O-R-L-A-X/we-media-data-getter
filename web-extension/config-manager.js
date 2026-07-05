@@ -206,19 +206,6 @@ class ConfigManager {
     }
 }
 
-// 添加一个全局函数，用于在 content-script 加载时立即获取配置
-window.__loadGlobalConfig = async function() {
-    if (typeof ConfigManager !== 'undefined') {
-        try {
-            await ConfigManager.get();
-            console.log('[ConfigLoader] Global config loaded:', ConfigManager.getSync());
-        } catch (e) {
-            console.error('[ConfigLoader] Failed to load config:', e);
-        }
-    }
-};
 
-// 导出到全局作用域
-if (typeof window !== 'undefined') {
-    window.ConfigManager = ConfigManager;
-}
+// 暴露到全局作用域（兼容 popup 和 service worker）
+self.ConfigManager = ConfigManager;

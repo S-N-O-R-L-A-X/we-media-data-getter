@@ -4,9 +4,9 @@
 
 class DouyinExtractor extends BaseExtractor {
     constructor() {
-        // 不设置任何默认值，直接从 ConfigManager 获取
-        super({
-            apiUrl: 'https://creator.douyin.com/janus/douyin/creator/pc/work_list'
+        super({ 
+            apiUrl: 'https://creator.douyin.com/janus/douyin/creator/pc/work_list',
+            pageSize: 12
         });
     }
 
@@ -19,58 +19,54 @@ class DouyinExtractor extends BaseExtractor {
     timestampToDateStr(timestamp) {
         if (!timestamp) return '';
         const date = new Date(timestamp * 1000);
-        const year = date.getFullYear();
-        const month = String(date.getMonth() + 1).padStart(2, '0');
-        const day = String(date.getDate()).padStart(2, '0');
-        return `${year}-${month}-${day}`;
+        return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
     }
 
-    async fetchDataFromAPI(pageOrCursor = 1) {
-        console.log('[DouyinExtractor] Fetching data...');
+    async fetchDataFromAPI(cursor = 0, pageSize = this.config.pageSize) {
         try {
-            const cookies = await this.getCookies();
-            const url = this.config.apiUrl + '?page=' + pageOrCursor + '&page_size=' + this.config.pageSize;
-            const response = await fetch(url, {
+            const url = new URL(this.config.apiUrl);
+            url.searchParams.set('status', '0');
+            url.searchParams.set('count', pageSize.toString());
+            url.searchParams.set('max_cursor', cursor.toString());
+            url.searchParams.set('scene', 'star_atlas');
+            url.searchParams.set('device_platform', 'web');
+            url.searchParams.set('aid', '1128');
+            url.searchParams.set('channel', 'channel_pc_web');
+            url.searchParams.set('work_type', '9');
+
+            const response = await fetch(url.toString(), {
+                method: 'GET',
                 headers: {
-                    'Cookie': cookies,
-                    'Content-Type': 'application/json'
-                }
+                    'Content-Type': 'application/json',
+                    'X-Requested-With': 'XMLHttpRequest',
+                    'User-Agent': navigator.userAgent
+                },
+                credentials: 'include'
             });
+
             const result = await response.json();
-            
-            if (result.status_code !== 0) {
-                return { tasks: [], has_more: false, cursor: 0, error: 'Status code: ' + result.status_code };
+
+            if (result.status_code !== undefined && result.status_code !== 0) {
+                return { tasks: [], has_more: false, cursor: 0, error: `Status code: ${result.status_code}` };
             }
-            
+
             let tasks = [];
-            if (result.aweme_list?.length) {
+            if (result.aweme_list && Array.isArray(result.aweme_list) && result.aweme_list.length > 0) {
                 tasks = this.extractFromAwemeList(result.aweme_list);
-            } else if (result.items?.length) {
+            } else if (result.items && Array.isArray(result.items) && result.items.length > 0) {
                 tasks = this.extractFromItems(result.items);
             }
-            
-            return { tasks, has_more: !!result.has_more, cursor: result.cursor || 0, error: null };
+
+            return { tasks, has_more: result.has_more || false, cursor: result.max_cursor || 0, error: null };
         } catch (error) {
             return { tasks: [], has_more: false, cursor: 0, error: error.message };
         }
     }
 
-    getCookies() {
-        return new Promise((resolve) => {
-            chrome.cookies.getAll({ domain: 'douyin.com' }, (cookies) => {
-                resolve(cookies.map(c => c.name + '=' + c.value).join('; '));
-            });
-        });
-    }
-
     extractFromAwemeList(awemeList) {
-        // 过滤被屏蔽/删除的视频
         const filteredList = this.config.filterBlocked
             ? awemeList.filter(item => !this.isItemBlocked(item))
             : awemeList;
-        if (this.config.filterBlocked && awemeList.length !== filteredList.length) {
-            console.log(`[DouyinExtractor] 已过滤 ${awemeList.length - filteredList.length} 条被屏蔽/删除的视频`);
-        }
         return filteredList.map(item => ({
             title: item.caption || item.desc || '',
             playCount: parseInt(item.statistics?.play_count, 10) || 0,
@@ -94,13 +90,9 @@ class DouyinExtractor extends BaseExtractor {
     }
 
     extractFromItems(items) {
-        // 过滤被屏蔽/删除的视频
         const filteredList = this.config.filterBlocked
             ? items.filter(item => !this.isItemBlocked(item))
             : items;
-        if (this.config.filterBlocked && items.length !== filteredList.length) {
-            console.log(`[DouyinExtractor] 已过滤 ${items.length - filteredList.length} 条被屏蔽/删除的视频`);
-        }
         return filteredList.map(item => ({
             title: item.description || item.item_title || '',
             playCount: parseInt(item.metrics?.view_count, 10) || 0,
@@ -123,67 +115,159 @@ class DouyinExtractor extends BaseExtractor {
         }));
     }
 
-    checkCutoffDate() {
-        if (!this.allData.length) return false;
-        // Check if any collected data item is before the cutoff date
-        return this.allData.some(item => !this.isValidTimestamp(item.createTimestamp));
+    parsePlayCount(text) {
+        if (!text) return 0;
+        text = text.replace(/\s+/g, '');
+        const match = text.match(/^([\d.]+)([万千+]?)$/);
+        if (!match) {
+            const numMatch = text.match(/^([\d.]+)/);
+            return numMatch ? parseFloat(numMatch[1]) || 0 : 0;
+        }
+        const num = parseFloat(match[1]);
+        const unit = match[2];
+        switch (unit) {
+            case '万': return num * 10000;
+            case '千': return num * 1000;
+            case '+': return Math.floor(num * 10000);
+            default: return num;
+        }
+    }
+
+    extractVideoId(url) {
+        if (!url) return null;
+        const match = url.match(/\/video\/(\d+)/);
+        return match ? match[1] : null;
+    }
+
+    extractDataFromDOM() {
+        console.log('[DouyinExtractor] 尝试从 DOM 中提取数据...');
+        const results = [];
+        const taskItems = document.querySelectorAll('[class*="task-card"], [class*="video-item"], .task-item, .video-card');
+        console.log(`[DouyinExtractor] 找到 ${taskItems.length} 个任务/视频元素`);
+        taskItems.forEach((el, index) => {
+            try {
+                const titleEl = el.querySelector('[class*="title"], [class*="name"], .title, .name');
+                const title = titleEl ? titleEl.textContent.trim() : '';
+                const viewsEl = el.querySelector('[class*="view"], [class*="play"], .views, .play-count');
+                const playCount = viewsEl ? this.parsePlayCount(viewsEl.textContent.trim()) : 0;
+                const likesEl = el.querySelector('[class*="like"], [class*="digg"], .likes, .digg-count');
+                const likeCount = likesEl ? this.parsePlayCount(likesEl.textContent.trim()) : 0;
+                const commentsEl = el.querySelector('[class*="comment"], .comment-count');
+                const commentCount = commentsEl ? this.parsePlayCount(commentsEl.textContent.trim()) : 0;
+                const sharesEl = el.querySelector('[class*="share"], .share-count');
+                const shareCount = sharesEl ? this.parsePlayCount(sharesEl.textContent.trim()) : 0;
+                const linkEl = el.querySelector('a[href*="/video/"]');
+                const url = linkEl ? linkEl.href : '';
+                const timeEl = el.querySelector('[class*="time"], [class*="date"], .publish-time');
+                const publishTime = timeEl ? timeEl.textContent.trim() : '';
+                if (title || playCount > 0) {
+                    results.push({
+                        title, playCount, likeCount, commentCount, shareCount,
+                        url, publishTime,
+                        videoId: this.extractVideoId(url),
+                        createTimestamp: 0,
+                        raw: el
+                    });
+                }
+            } catch (e) {
+                console.error(`[DouyinExtractor] DOM 提取第 ${index + 1} 条失败:`, e);
+            }
+        });
+        console.log(`[DouyinExtractor] DOM 提取到 ${results.length} 条有效数据`);
+        return results;
     }
 
     async extractCurrentPage() {
+        await this.loadConfig();
         console.log('[DouyinExtractor] Extracting current page...');
-        const apiResult = await this.fetchDataFromAPI(this.currentPage);
-        if (apiResult.error || !apiResult.tasks.length) {
-            return { success: false, message: apiResult.error || 'No data' };
+
+        try {
+            const apiResult = await this.fetchDataFromAPI(0, 30);
+            if (apiResult.tasks && apiResult.tasks.length > 0) {
+                const existingUrls = new Set(this.allData.map(item => item.url));
+                const newData = apiResult.tasks.filter(item => !existingUrls.has(item.url));
+                const filtered = newData.filter(item => this.isValidTimestamp(item.createTimestamp));
+                this.allData.push(...filtered);
+                this.notifyProgress(true, this.currentPage, this.config.maxPages, filtered.length, this.allData.length);
+                return { success: true, total: this.allData.length };
+            }
+        } catch (error) {
+            console.error('[DouyinExtractor] API 提取失败，尝试 DOM 提取:', error);
         }
-        const filtered = apiResult.tasks.filter(item => this.isValidTimestamp(item.createTimestamp));
-        this.allData.push(...filtered);
-        this.notifyProgress(true, this.currentPage, this.config.maxPages, filtered.length, this.allData.length);
-        return { success: true, total: this.allData.length };
+
+        const domData = this.extractDataFromDOM();
+        if (domData.length > 0) {
+            const existingUrls = new Set(this.allData.map(item => item.url));
+            const newData = domData.filter(item => !existingUrls.has(item.url));
+            if (newData.length > 0) {
+                this.allData.push(...newData);
+                this.notifyProgress(true, this.currentPage, this.config.maxPages, newData.length, this.allData.length);
+                return { success: true, count: newData.length, total: this.allData.length };
+            }
+        }
+        return { success: false, message: '未能从页面提取到数据' };
     }
 
-    async startAutoExtraction(maxPages = this.config.maxPages) {
+    checkCutoffDate() {
+        if (this.allData.length === 0) return false;
+        const sortedData = [...this.allData].sort((a, b) => b.createTimestamp - a.createTimestamp);
+        for (let i = 0; i < sortedData.length; i++) {
+            if (!this.isValidTimestamp(sortedData[i].createTimestamp)) {
+                if (i >= 3) {
+                    console.log(`[DouyinExtractor] ⚠️ 第 ${i + 1} 条数据 (${sortedData[i].title}) 超过截止日期，停止抓取`);
+                    return true;
+                } else if (i < 3) {
+                    console.log(`[DouyinExtractor] ℹ️ 前三项中检测到过期数据：${sortedData[i].title}`);
+                }
+            }
+        }
+        return false;
+    }
+
+    async startAutoExtraction(maxPages = this.config.maxPages, cutoffDate) {
         if (this.isRunning) return { success: false, message: 'Already running' };
+        await this.loadConfig({ cutoffDate });
         this.isRunning = true;
         this.allData = [];
         this.currentPage = 1;
         this.notifyProgress(true, 1, maxPages, 0, 0);
-        
+
         try {
             let cursor = 0;
             let pageCount = 0;
-            
+
             while (pageCount < maxPages && this.isRunning) {
                 const apiResult = await this.fetchDataFromAPI(cursor);
-                
                 if (apiResult.error || !apiResult.tasks.length) break;
-                
+
                 const existingUrls = new Set(this.allData.map(item => item.url));
                 const newWorks = apiResult.tasks.filter(w => !existingUrls.has(w.url));
-                
+
                 if (!newWorks.length) {
                     console.log('[DouyinExtractor] No new data');
                     break;
                 }
-                
-                // Check if any new works are before cutoff date (before filtering)
-                const hasOldData = newWorks.some(w => !this.isValidTimestamp(w.createTimestamp));
+
                 const validWorks = newWorks.filter(w => this.isValidTimestamp(w.createTimestamp));
-                this.allData.push(...validWorks);
+                if (validWorks.length > 0) {
+                    this.allData.push(...validWorks);
+                }
+
                 this.notifyProgress(true, pageCount + 1, maxPages, validWorks.length, this.allData.length);
-                
-                if (hasOldData) {
+
+                if (validWorks.length === 0 || this.checkCutoffDate()) {
                     await this.saveDataToStorage();
                     this.isRunning = false;
                     this.notifyProgress(false, pageCount + 1, maxPages, 0, this.allData.length);
-                    console.log('[DouyinExtractor] Reached cutoff date, stopping extraction');
+                    console.log('[DouyinExtractor] Reached cutoff date, stopping');
                     return { success: true, totalCount: this.allData.length };
                 }
-                
+
                 if ((pageCount + 1) % 5 === 0) await this.saveDataToStorage();
-                cursor += this.config.pageSize;
+                cursor = apiResult.cursor || (cursor + this.config.pageSize);
                 pageCount++;
             }
-            
+
             await this.saveDataToStorage();
             this.isRunning = false;
             this.notifyProgress(false, pageCount, maxPages, 0, this.allData.length);
@@ -196,14 +280,57 @@ class DouyinExtractor extends BaseExtractor {
     }
 
     generateCSV(data) {
-        let csv = '\uFEFF"标题","播放数","点赞数","评论数","收藏数","分享数","作者","视频链接","发布时间"\n';
+        let csv = '\uFEFF"发布日期","视频链接","播放量","点赞","评论","收藏","分享"\n';
         for (const item of data) {
-            csv += `"${(item.title || '').replace(/"/g, '""')}",${item.playCount},${item.likeCount},${item.commentCount},${item.collectCount},${item.shareCount},"${(item.authorName || '').replace(/"/g, '""')}",\"${item.url}\",\"${item.publishTime}\"\n`;
+            csv += `"${item.publishTime}","${item.url}",${item.playCount},${item.likeCount},${item.commentCount},${item.collectCount},${item.shareCount}\n`;
         }
         return csv;
     }
+
+    async exportToCSV() {
+        let dataToExport = [];
+        try {
+            const result = await new Promise((resolve) => {
+                chrome.storage.local.get(['douyinData_batch'], (r) => resolve(r));
+            });
+            if (result.douyinData_batch && result.douyinData_batch.length > 0) {
+                dataToExport = result.douyinData_batch.reverse();
+            } else if (this.allData.length > 0) {
+                dataToExport = this.allData.reverse();
+            }
+        } catch (error) {
+            console.error('[DouyinExtractor] 从 storage 加载数据失败:', error);
+            dataToExport = this.allData;
+        }
+
+        if (dataToExport.length === 0) {
+            return { success: false, message: '暂无数据可导出！' };
+        }
+
+        const csv = this.generateCSV(dataToExport);
+        const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `douyin_videos_${new Date().toISOString().split('T')[0]}.csv`;
+        document.body.appendChild(a);
+        a.click();
+        setTimeout(() => {
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+        }, 100);
+
+        console.log('[DouyinExtractor] ✅ 已导出 ' + dataToExport.length + ' 条数据到 CSV 文件');
+        
+        chrome.runtime.sendMessage({
+            action: 'showNotification',
+            message: `成功导出 ${dataToExport.length} 条数据！`
+        }).catch(console.error);
+
+        return { success: true, count: dataToExport.length };
+    }
 }
 
-if (typeof window !== 'undefined') {
-    window.DouyinExtractor = DouyinExtractor;
+if (typeof globalThis !== 'undefined') {
+    globalThis.DouyinExtractor = DouyinExtractor;
 }

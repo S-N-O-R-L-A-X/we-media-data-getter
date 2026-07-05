@@ -2,74 +2,38 @@
 // Extractor Factory - 提取器工厂
 // ============================================
 
-/**
- * Factory class for managing all platform extractors
- * 管理所有平台提取器的工厂类
- */
 class ExtractorFactory {
     constructor() {
-        this.extractors = new Map();
-        this.registeredPlatforms = [];
+        this.extractors = [];
     }
 
-    /**
-     * Register an extractor instance
-     * @param {BaseExtractor} extractor 
-     */
     register(extractor) {
-        const platformName = extractor.getPlatformName().toLowerCase();
-        
-        if (this.extractors.has(platformName)) {
-            console.warn(`[ExtractorFactory] Platform "${platformName}" already registered`);
+        if (extractor instanceof BaseExtractor) {
+            this.extractors.push(extractor);
         } else {
-            this.extractors.set(platformName, extractor);
-            this.registeredPlatforms.push(platformName);
-            console.log(`[ExtractorFactory] Registered extractor for platform: ${platformName}`);
+            console.warn('Only instances of BaseExtractor can be registered');
         }
     }
 
-    /**
-     * Get extractor by platform name
-     * @param {string} platformName 
-     * @returns {BaseExtractor|null}
-     */
-    getExtractor(platformName) {
-        return this.extractors.get(platformName.toLowerCase()) || null;
+    getAllExtractors() {
+        return this.extractors;
     }
 
-    /**
-     * Find matching extractor for current URL
-     * @param {string} url 
-     * @returns {BaseExtractor|null}
-     */
-    findExtractorForUrl(url) {
-        for (const extractor of this.extractors.values()) {
-            if (extractor.matchesUrl(url)) {
-                return extractor;
-            }
-        }
-        return null;
-    }
-
-    /**
-     * Get all registered platforms
-     * @returns {Array<string>}
-     */
-    getAllPlatforms() {
-        return [...this.registeredPlatforms];
-    }
-
-    /**
-     * Check if a specific platform is supported
-     * @param {string} platformName 
-     * @returns {boolean}
-     */
-    isPlatformSupported(platformName) {
-        return this.extractors.has(platformName.toLowerCase());
+    getExtractorByUrl(url) {
+        return this.extractors.find(ex => ex.matchesUrl(url));
     }
 }
 
-// Export to global scope
-if (typeof window !== 'undefined') {
-    window.ExtractorFactory = ExtractorFactory;
+// Create factory instance (singleton, guard against re-injection)
+if (!globalThis.__factoryLoaded) {
+    globalThis.__factoryLoaded = true;
+    const instance = new ExtractorFactory();
+    instance.register(new TiebaExtractor());
+    instance.register(new DouyinExtractor());
+
+    // Expose globally for both content script (window) and service worker (globalThis)
+    if (typeof globalThis !== 'undefined') {
+        globalThis.ExtractorFactory = ExtractorFactory;
+        globalThis.factory = instance;
+    }
 }

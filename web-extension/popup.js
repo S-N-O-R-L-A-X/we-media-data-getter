@@ -13,8 +13,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         const exportCsvBtn = document.getElementById('exportCsvBtn');
         const messageBox = document.getElementById('messageBox');
         
-        // 更新 UI 状态
-        if (totalCountEl) totalCountEl.textContent = message.totalItems || message.total || '0';
+        // 更新 UI 状态（totalItems 可能为 0，需明确判断）
+        if (totalCountEl) totalCountEl.textContent = message.totalItems !== undefined ? message.totalItems : (message.total || '0');
         
         if (extractionStatusEl) {
             extractionStatusEl.textContent = message.isRunning ? '抓取中...' : '空闲';
@@ -112,12 +112,18 @@ document.addEventListener('DOMContentLoaded', async () => {
         return tab;
     }
     
-    // 注入 content script 到当前标签页
+    // 注入 content script 到当前标签页（按依赖顺序注入所有文件）
     async function injectContentScript(tabId) {
         return new Promise((resolve, reject) => {
             chrome.scripting.executeScript({
                 target: { tabId },
-                files: ['content-script.js']
+                files: [
+                    'extractors/base-extractor.js',
+                    'extractors/tieba-extractor.js',
+                    'extractors/douyin-extractor.js',
+                    'extractors/extractor-factory.js',
+                    'content-script.js'
+                ]
             }, () => {
                 if (chrome.runtime.lastError) {
                     reject(new Error(chrome.runtime.lastError.message));
@@ -129,7 +135,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
 
     // 发送消息到 content script（带注入回退）
-    async function sendMessageToContent(action, data = {}) {
+    async function sendMessageToContent(action, data = {}, options = {}) {
         const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
         if (!tabs || tabs.length === 0) {
             throw new Error('No active tab found');
@@ -139,6 +145,8 @@ document.addEventListener('DOMContentLoaded', async () => {
         if (!tab.id) {
             throw new Error('Tab has no ID');
         }
+        
+        const timeout = options.timeout || 10000;
         
         // 尝试发送消息，如果失败则注入 content script 后重试一次
         for (let attempt = 0; attempt < 2; attempt++) {
@@ -152,8 +160,11 @@ document.addEventListener('DOMContentLoaded', async () => {
                         }
                     });
                     
-                    // 设置超时
-                    setTimeout(() => reject(new Error('Request timeout')), 10000);
+                    // 设置超时（仅对非长时间运行的操作）
+                    let timeoutId = null;
+                    if (action !== 'startAutoExtraction') {
+                        timeoutId = setTimeout(() => reject(new Error('Request timeout')), timeout);
+                    }
                 });
                 return response; // 成功则返回
             } catch (error) {
@@ -327,6 +338,39 @@ document.addEventListener('DOMContentLoaded', async () => {
         });
     }
     
+    // 从 storage 恢复提取状态
+    async function restoreExtractionState() {
+        try {
+            const result = await new Promise((resolve) => {
+                chrome.storage.local.get(['extractionState'], (result) => {
+                    resolve(result);
+                });
+            });
+            
+            if (result.extractionState && result.extractionState.isRunning) {
+                const state = result.extractionState;
+                updateUI(true, state.currentPage, state.totalItems);
+                showMessage(`⏳ 检测到正在进行的抓取任务 (${state.platform})`, 'info');
+                
+                // 如果 10 分钟后状态未更新，自动清除
+                if (state.lastUpdate) {
+                    const lastUpdate = new Date(state.lastUpdate);
+                    const now = new Date();
+                    const diffMinutes = (now - lastUpdate) / 60000;
+                    
+                    if (diffMinutes > 10) {
+                        chrome.storage.local.remove(['extractionState']);
+                        updateUI(false, 0, 0);
+                    }
+                }
+                return true; // 有正在运行的任务
+            }
+        } catch (error) {
+            console.error('[Popup] 恢复状态失败:', error);
+        }
+        return false;
+    }
+    
     // 初始化页面标题和检查是否在正确的页面
     async function init() {
         const tab = await getActiveTab();
@@ -367,8 +411,11 @@ document.addEventListener('DOMContentLoaded', async () => {
             if (exportCsvBtn) exportCsvBtn.innerHTML = '📁 导出贴吧数据 CSV';
         }
         
-        // 更新 UI 状态
-        updateUI(false, null, 0);
+        // 先恢复提取状态，如果有正在运行的任务则不重置计数
+        const hasRunning = await restoreExtractionState();
+        if (!hasRunning) {
+            updateUI(false, null, 0);
+        }
     }
     
     // 提取当前页
@@ -398,13 +445,22 @@ document.addEventListener('DOMContentLoaded', async () => {
             const config = await ConfigManager.get(['maxPages']);
             const pages = config.maxPages || 42;
             
-            const response = await sendMessageToContent('startAutoExtraction', { pages: pages });
-            if (response && response.success) {
-                updateUI(true, 0, 0);
-                showMessage(`✅ 自动抓取已开始`, 'success');
-            } else {
-                showMessage('❌ 启动失败：' + (response?.error || '未知错误'), 'error');
+            // 先确保 content script 已注入
+            const tab = await getActiveTab();
+            if (!tab?.id) throw new Error('No active tab');
+            try {
+                await chrome.tabs.sendMessage(tab.id, { action: 'ping' });
+            } catch {
+                await injectContentScript(tab.id);
+                await new Promise(r => setTimeout(r, 500));
             }
+            
+            // 发送开始指令（不要等待响应，提取结果通过 extractionProgress 消息广播通知）
+            chrome.tabs.sendMessage(tab.id, { action: 'startAutoExtraction', pages })
+                .catch(err => console.error('[Popup] startAutoExtraction send failed:', err));
+            
+            updateUI(true, 0, 0);
+            showMessage(`✅ 自动抓取已开始`, 'success');
         } catch (error) {
             console.error('Start auto error:', error);
             showMessage('❌ 错误：' + error.message, 'error');
@@ -467,39 +523,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     // 初始化设置功能
     initSettings();
     
-    // 从 storage 恢复提取状态
-    async function restoreExtractionState() {
-        try {
-            const result = await new Promise((resolve) => {
-                chrome.storage.local.get(['extractionState'], (result) => {
-                    resolve(result);
-                });
-            });
-            
-            if (result.extractionState && result.extractionState.isRunning) {
-                const state = result.extractionState;
-                updateUI(true, state.currentPage, state.totalItems);
-                showMessage(`⏳ 检测到正在进行的抓取任务 (${state.platform})`, 'info');
-                
-                // 如果 10 分钟后状态未更新，自动清除
-                if (state.lastUpdate) {
-                    const lastUpdate = new Date(state.lastUpdate);
-                    const now = new Date();
-                    const diffMinutes = (now - lastUpdate) / 60000;
-                    
-                    if (diffMinutes > 10) {
-                        // 清除过期的状态
-                        chrome.storage.local.remove(['extractionState']);
-                        updateUI(false, 0, 0);
-                    }
-                }
-            }
-        } catch (error) {
-            console.error('[Popup] 恢复状态失败:', error);
-        }
-    }
-    
     // 初始化
-    restoreExtractionState();
     init();
 });

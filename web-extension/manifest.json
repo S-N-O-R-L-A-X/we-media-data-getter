@@ -19,7 +19,13 @@
         "https://tieba.baidu.com/home/creative/work*",
         "https://creator.douyin.com/creator-micro/content/manage*"
       ],
-      "js": ["content-script.js"],
+      "js": [
+        "extractors/base-extractor.js",
+        "extractors/tieba-extractor.js",
+        "extractors/douyin-extractor.js",
+        "extractors/extractor-factory.js",
+        "content-script.js"
+      ],
       "run_at": "document_end"
     }
   ],
@@ -34,8 +40,8 @@
       "48": "icons/icon-48.svg",
       "128": "icons/icon-128.svg"
     }
-   },
-   "icons": {
+  },
+  "icons": {
     "16": "icons/icon-16.svg",
     "48": "icons/icon-48.svg",
     "128": "icons/icon-128.svg"
