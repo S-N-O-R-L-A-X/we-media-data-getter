@@ -6,6 +6,7 @@ importScripts(
     'extractors/base-extractor.js',
     'extractors/tieba-extractor.js',
     'extractors/douyin-extractor.js',
+    'extractors/xiaohongshu-extractor.js',
     'extractors/extractor-factory.js'
 );
 
@@ -62,7 +63,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             return true;
 
         case 'clearData':
-            chrome.storage.local.remove(['tiebadata_batch', 'douyindata_batch', 'extractionState'])
+            chrome.storage.local.remove(['tiebadata_batch', 'douyindata_batch', 'xiaohongshuData_batch', 'extractionState'])
                 .then(() => sendResponse({ success: true }))
                 .catch(err => sendResponse({ success: false, error: err.message }));
             return true;

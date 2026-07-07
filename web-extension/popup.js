@@ -1,5 +1,5 @@
 // ============================================
-// 视频数据提取器 - Popup Script（支持贴吧和抖音）
+// 视频数据提取器 - Popup Script（支持贴吧、抖音和小红书）
 // ============================================
 
 // 监听来自 background/content-script 的消息
@@ -67,7 +67,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     const messageBox = document.getElementById('messageBox');
     
     // 当前平台类型
-    let currentPlatform = 'tieba'; // 'tieba' 或 'douyin'
+    let currentPlatform = 'tieba'; // 'tieba', 'douyin' 或 'xiaohongshu'
     
     // 设置模态框元素
     let settingsModal = null;
@@ -106,6 +106,11 @@ document.addEventListener('DOMContentLoaded', async () => {
         return window.location.href.startsWith('https://tieba.baidu.com/home/creative/work');
     }
     
+    // 检查是否是小红书页面
+    function isXiaohongshuPage() {
+        return window.location.href.includes('creator.xiaohongshu.com');
+    }
+    
     // 获取当前活动标签页
     async function getActiveTab() {
         const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -121,6 +126,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                     'extractors/base-extractor.js',
                     'extractors/tieba-extractor.js',
                     'extractors/douyin-extractor.js',
+                    'extractors/xiaohongshu-extractor.js',
                     'extractors/extractor-factory.js',
                     'content-script.js'
                 ]
@@ -237,17 +243,14 @@ document.addEventListener('DOMContentLoaded', async () => {
     async function saveSettings() {
         try {
             const cutoffDateStr = cutoffDateInput?.value;
-            if (!cutoffDateStr) {
-                showMessage('⚠️ 请选择截止日期', 'warning');
-                return;
+            let cutoffDate = null;
+            if (cutoffDateStr) {
+                const cutoffDateObj = new Date(cutoffDateStr);
+                cutoffDateObj.setHours(23, 59, 59, 999);
+                cutoffDate = cutoffDateObj.toISOString();
             }
-            
-            // 将截止日期设置为当天的 23:59:59，确保包含截止日期的全天数据
-            const cutoffDateObj = new Date(cutoffDateStr);
-            // 设置为当天最后一秒 (23:59:59)
-            cutoffDateObj.setHours(23, 59, 59, 999);
             const config = {
-                cutoffDate: cutoffDateObj.toISOString(),
+                cutoffDate,
                 maxPages: parseInt(maxPagesInput?.value, 10),
                 autoPageDelay: parseInt(autoPageDelayInput?.value, 10),
                 waitForPageLoadTimeout: parseInt(waitForPageLoadTimeoutInput?.value, 10),
@@ -394,9 +397,14 @@ document.addEventListener('DOMContentLoaded', async () => {
             if (pageTitle) {
                 pageTitle.textContent = '📊 百度贴吧数据提取器';
             }
+        } else if (url.includes('creator.xiaohongshu.com')) {
+            currentPlatform = 'xiaohongshu';
+            if (pageTitle) {
+                pageTitle.textContent = '📊 小红书笔记数据提取器';
+            }
         } else {
             // 不在任何支持的页面
-            showMessage(`⚠️ 请打开抖音创作者服务平台或百度贴吧创作页面`, 'warning');
+            showMessage(`⚠️ 请打开抖音创作者服务平台、百度贴吧创作页面或小红书创作者服务平台`, 'warning');
             if (startAutoBtn) startAutoBtn.style.display = 'none';
             if (exportCsvBtn) exportCsvBtn.style.display = 'none';
             return;
@@ -406,6 +414,9 @@ document.addEventListener('DOMContentLoaded', async () => {
         if (currentPlatform === 'douyin') {
             if (startAutoBtn) startAutoBtn.innerHTML = '🚀 开始自动抓取<br><small>(抖音视频数据)</small>';
             if (exportCsvBtn) exportCsvBtn.innerHTML = '📁 导出抖音视频 CSV';
+        } else if (currentPlatform === 'xiaohongshu') {
+            if (startAutoBtn) startAutoBtn.innerHTML = '🚀 开始自动抓取<br><small>(小红书笔记数据)</small>';
+            if (exportCsvBtn) exportCsvBtn.innerHTML = '📁 导出小红书笔记 CSV';
         } else {
             if (startAutoBtn) startAutoBtn.innerHTML = '🚀 开始自动抓取<br><small>(百度贴吧数据)</small>';
             if (exportCsvBtn) exportCsvBtn.innerHTML = '📁 导出贴吧数据 CSV';
@@ -441,8 +452,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     // 开始自动抓取
     async function startAutoExtraction() {
         try {
-            // 从全局配置获取最大页数
-            const config = await ConfigManager.get(['maxPages']);
+            // 从全局配置获取配置（包括截止日期）
+            const config = await ConfigManager.get();
             const pages = config.maxPages || 42;
             
             // 先确保 content script 已注入
@@ -456,7 +467,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             }
             
             // 发送开始指令（不要等待响应，提取结果通过 extractionProgress 消息广播通知）
-            chrome.tabs.sendMessage(tab.id, { action: 'startAutoExtraction', pages })
+            chrome.tabs.sendMessage(tab.id, { action: 'startAutoExtraction', pages, cutoffDate: config.cutoffDate || null })
                 .catch(err => console.error('[Popup] startAutoExtraction send failed:', err));
             
             updateUI(true, 0, 0);

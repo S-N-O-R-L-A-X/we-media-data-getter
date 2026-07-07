@@ -100,7 +100,10 @@ if (window.__extractorLoaded) {
                         response = await matchedExtractor.extractCurrentPage();
                         break;
                     case 'startAutoExtraction':
-                        response = await matchedExtractor.startAutoExtraction(message.pages || matchedExtractor.config.maxPages);
+                        response = await matchedExtractor.startAutoExtraction(
+                            message.pages || matchedExtractor.config.maxPages,
+                            message.cutoffDate
+                        );
                         break;
                     case 'stopExtraction':
                         response = matchedExtractor.stopExtraction();

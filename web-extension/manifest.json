@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "We-Media Data Extractor",
   "version": "1.0.0",
-  "description": "自媒体视频数据提取器 - 支持百度贴吧和抖音创作者服务平台",
+  "description": "自媒体视频数据提取器 - 支持百度贴吧、抖音和小红书创作者服务平台",
   "permissions": [
     "activeTab",
     "storage",
@@ -11,18 +11,21 @@
   ],
   "host_permissions": [
     "https://tieba.baidu.com/*",
-    "https://creator.douyin.com/*"
+    "https://creator.douyin.com/*",
+    "https://creator.xiaohongshu.com/*"
   ],
   "content_scripts": [
     {
       "matches": [
         "https://tieba.baidu.com/home/creative/work*",
-        "https://creator.douyin.com/creator-micro/content/manage*"
+        "https://creator.douyin.com/creator-micro/content/manage*",
+        "https://creator.xiaohongshu.com/*"
       ],
       "js": [
         "extractors/base-extractor.js",
         "extractors/tieba-extractor.js",
         "extractors/douyin-extractor.js",
+        "extractors/xiaohongshu-extractor.js",
         "extractors/extractor-factory.js",
         "content-script.js"
       ],
