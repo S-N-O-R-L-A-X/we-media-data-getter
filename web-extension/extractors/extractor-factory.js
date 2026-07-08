@@ -31,6 +31,7 @@ if (!globalThis.__factoryLoaded) {
     instance.register(new TiebaExtractor());
     instance.register(new DouyinExtractor());
     instance.register(new XiaohongshuExtractor());
+    instance.register(new ShipinhaoExtractor());
 
     // Expose globally for both content script (window) and service worker (globalThis)
     if (typeof globalThis !== 'undefined') {
