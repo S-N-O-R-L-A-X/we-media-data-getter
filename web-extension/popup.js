@@ -1,5 +1,5 @@
 // ============================================
-// 视频数据提取器 - Popup Script（支持贴吧、抖音、小红书和视频号）
+// 视频数据提取器 - Popup Script（支持贴吧、抖音、小红书、视频号和快手）
 // ============================================
 
 // 监听来自 background/content-script 的消息
@@ -67,7 +67,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     const messageBox = document.getElementById('messageBox');
     
     // 当前平台类型
-    let currentPlatform = 'tieba'; // 'tieba', 'douyin', 'xiaohongshu' 或 'shipinhao'
+    let currentPlatform = 'tieba'; // 'tieba', 'douyin', 'xiaohongshu', 'shipinhao' 或 'kuaishou'
     
     // 设置模态框元素
     let settingsModal = null;
@@ -116,6 +116,11 @@ document.addEventListener('DOMContentLoaded', async () => {
         return window.location.href.startsWith('https://channels.weixin.qq.com/micro/content/post/list') ||
                window.location.href.startsWith('https://channels.weixin.qq.com/platform/post/list');
     }
+
+    // 检查是否是快手页面
+    function isKuaishouPage() {
+        return window.location.href.startsWith('https://cp.kuaishou.com/article/manage/video');
+    }
     
     // 获取当前活动标签页
     async function getActiveTab() {
@@ -132,6 +137,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                     'extractors/base-extractor.js',
                     'extractors/tieba-extractor.js',
                     'extractors/douyin-extractor.js',
+                    'extractors/kuaishou-extractor.js',
                     'extractors/xiaohongshu-extractor.js',
                     'extractors/shipinhao-extractor.js',
                     'extractors/extractor-factory.js',
@@ -414,9 +420,14 @@ document.addEventListener('DOMContentLoaded', async () => {
             if (pageTitle) {
                 pageTitle.textContent = '📊 视频号数据提取器';
             }
+        } else if (url.startsWith('https://cp.kuaishou.com/article/manage/video')) {
+            currentPlatform = 'kuaishou';
+            if (pageTitle) {
+                pageTitle.textContent = '📊 快手视频数据提取器';
+            }
         } else {
             // 不在任何支持的页面
-            showMessage(`⚠️ 请打开抖音创作者服务平台、百度贴吧创作页面、小红书创作者服务平台或视频号页面`, 'warning');
+            showMessage(`⚠️ 请打开抖音创作者服务平台、百度贴吧创作页面、小红书创作者服务平台、视频号页面或快手作品管理页面`, 'warning');
             if (startAutoBtn) startAutoBtn.style.display = 'none';
             if (exportCsvBtn) exportCsvBtn.style.display = 'none';
             return;
@@ -432,6 +443,9 @@ document.addEventListener('DOMContentLoaded', async () => {
         } else if (currentPlatform === 'shipinhao') {
             if (startAutoBtn) startAutoBtn.innerHTML = '🚀 开始自动抓取<br><small>(视频号数据)</small>';
             if (exportCsvBtn) exportCsvBtn.innerHTML = '📁 导出视频号数据 CSV';
+        } else if (currentPlatform === 'kuaishou') {
+            if (startAutoBtn) startAutoBtn.innerHTML = '🚀 开始自动抓取<br><small>(快手视频数据)</small>';
+            if (exportCsvBtn) exportCsvBtn.innerHTML = '📁 导出快手视频 CSV';
         } else {
             if (startAutoBtn) startAutoBtn.innerHTML = '🚀 开始自动抓取<br><small>(百度贴吧数据)</small>';
             if (exportCsvBtn) exportCsvBtn.innerHTML = '📁 导出贴吧数据 CSV';

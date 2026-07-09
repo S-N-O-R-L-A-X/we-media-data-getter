@@ -28,10 +28,20 @@ class ExtractorFactory {
 if (!globalThis.__factoryLoaded) {
     globalThis.__factoryLoaded = true;
     const instance = new ExtractorFactory();
-    instance.register(new TiebaExtractor());
-    instance.register(new DouyinExtractor());
-    instance.register(new XiaohongshuExtractor());
-    instance.register(new ShipinhaoExtractor());
+    const extractors = {
+        TiebaExtractor: globalThis.TiebaExtractor,
+        DouyinExtractor: globalThis.DouyinExtractor,
+        XiaohongshuExtractor: globalThis.XiaohongshuExtractor,
+        ShipinhaoExtractor: globalThis.ShipinhaoExtractor,
+        KuaishouExtractor: globalThis.KuaishouExtractor,
+    };
+    for (const [name, Extractor] of Object.entries(extractors)) {
+        if (typeof Extractor === 'function') {
+            instance.register(new Extractor());
+        } else {
+            console.warn(`[ExtractorFactory] ${name} not found, skipping registration`);
+        }
+    }
 
     // Expose globally for both content script (window) and service worker (globalThis)
     if (typeof globalThis !== 'undefined') {
